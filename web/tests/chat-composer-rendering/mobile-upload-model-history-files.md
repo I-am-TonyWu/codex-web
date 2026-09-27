@@ -1,0 +1,15 @@
+# Windows mobile regression (custom tray 1.4.0)
+
+Prerequisites: built web service, logged-in Codex on the Windows host. Use only a disposable TestChat and synthetic files. Run the checked-in `scripts/mobile-regression.cjs` with the fixture at `output/mobile-regression.html` on the current checkout's Vite port 4173. Chrome is used in an isolated headless profile. Fixture files are included in the source archive.
+
+1. Select GPT-6-astra, open reasoning options. Expect only the efforts from `model/list` (currently Low, Medium, High, Extra high, Max, Ultra). Restore an old unsupported `none` draft; expect automatic correction to the server default.
+2. Select a large test file and simulate progress at 50% and 100%. Expect visible filename, percentage and progress bar. Sending stays disabled even at 100% until the server confirms storage. Success displays ✓ 已上传 and enables sending. Simulated HTTP failure displays an explicit failure, never a successful attachment. Repeat with a folder; sending remains blocked until all uploads finish.
+3. With 121 multi-paragraph messages, scroll upward repeatedly to History 0. Expect full paragraph height, no flex shrink and no forced jump back to the latest message. Exercise 375×812 and 768×1024 in light and dark themes.
+4. In TestChat, send a unique marker and ask for `[下载测试文件](<C:/.../TestChat 100%23 # 中文.txt>)`. Inspect the rendered assistant link: hrefOk/titleOk/textOk must all be true. Open the project-files link, download the file and compare its content. Verify an unauthenticated remote-host request receives the existing login page rather than file contents.
+5. Refresh the thread, then restart only the tray-managed service and reread history. Confirm no lost messages.
+
+Evidence: `output/playwright/mobile-results.json`, `testchat-mobile-files-cjs.png`, `testchat-live-mobile-files-cjs.png`, and `live-mobile-results.json`. The real service test uses port 18923 and a disposable thread. UI fixtures stub requests and XHR to exercise progress and failures deterministically; this is not a measured mobile-carrier upload-speed test.
+
+Cleanup: archive the disposable TestChat and remove only generated test attachments if desired. Do not modify real histories, credentials, or Cloudflare settings. Leave the current port-4173 verification server running.
+
+Performance audit: model capabilities reuse the existing model/list response, adding zero requests; refresh replaces stale capabilities. Upload progress is driven by XHR events with no polling or duplicate upload; file rows are scoped to the current draft. History still uses bounded initial rendering and loads earlier chunks on demand; flex correction adds no RPC. Download streams the existing local file rather than buffering a second copy; directory metadata fanout is the existing implementation, unchanged. Main build gzip is approximately 162 KB plus lazy-loaded conversation code at 20 KB. Windows native tests were used; Docker is not installed, so the separate Docker provider/auth matrix was not run.

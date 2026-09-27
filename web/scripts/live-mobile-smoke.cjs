@@ -1,0 +1,20 @@
+const {chromium}=require('playwright');const assert=require('node:assert/strict');const path=require('node:path');const fs=require('node:fs');
+(async()=>{
+ const browser=await chromium.launch({headless:true,channel:'chrome'});
+ const page=await browser.newPage({viewport:{width:375,height:812}});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:18923/#/thread/01a0d7bf-3868-7ce0-977e-5e6b69dc5004');
+ const link=page.locator('.message-file-link').filter({hasText:'下载测试文件'}).last();
+ await link.waitFor({timeout:30000});
+ const checks=await link.evaluate(a=>({hrefOk:a.getAttribute('href').includes('100%2523%20%23%20'),titleOk:a.title.endsWith('TestChat 100%23 # 中文.txt'),textOk:a.textContent.trim()==='下载测试文件'}));
+ assert.deepEqual(checks,{hrefOk:true,titleOk:true,textOk:true});
+ const href=await link.getAttribute('href');
+ const response=await page.request.get('http://127.0.0.1:18923'+href+'?download=1');
+ assert.equal(response.status(),200);assert.equal(await response.text(),'TestChat-MOBILE-20260925-DOWNLOAD');
+ assert(response.headers()['content-disposition'].startsWith('attachment;'));
+ await page.reload();await link.waitFor();
+ await page.waitForTimeout(2500);await page.screenshot({path:path.resolve('output/playwright/testchat-live-mobile-files-cjs.png')});
+ assert.equal(errors.length,0);
+ fs.writeFileSync('output/playwright/live-mobile-results.json',JSON.stringify({...checks,download:true,refreshPersistence:true,errors},null,2));
+ console.log(JSON.stringify({...checks,download:true,refreshPersistence:true,errors}));await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

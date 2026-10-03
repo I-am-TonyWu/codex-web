@@ -39,6 +39,7 @@ The tray menu contains status, Open web, Settings, and Exit. Start/stop/restart,
 - Create and read Codex work tasks, with desktop task synchronization support.
 - Filter reasoning-effort options using model capabilities.
 - Improvements to long conversation loading and scrolling.
+- Render Mermaid diagrams with light/dark themes, source toggling, and a full-size preview. Diagram assets are bundled locally, with no external CDN required.
 - File-upload progress, sending locked during uploads, and retryable failures.
 - Open or download generated host files through web links. Preview support depends on file type and browser.
 - Discover installed desktop skills/plugins and reference them in tasks. Expand long descriptions; show available Chinese descriptions and retain original text where no translation exists.

@@ -1,5 +1,5 @@
 <template>
-  <section class="conversation-root" @contextmenu.capture="onConversationContextMenu">
+  <section v-mermaid class="conversation-root" @mermaid-resize="onPendingImageSettled" @contextmenu.capture="onConversationContextMenu">
     <a v-if="cwd" class="conversation-files-link" :href="toBrowseUrl(cwd)" target="_blank" rel="noopener">查看 / 下载项目文件</a>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
@@ -347,7 +347,7 @@
                 <div
                   v-else
                   class="message-text-flow"
-                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
+                  v-memo="[message.id, message.text, message.messageType, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
                 >
                   <template v-for="(block, blockIndex) in getMessageBlocks(message)" :key="`block-${blockIndex}`">
                     <p v-if="block.kind === 'paragraph'" class="message-text">
@@ -570,6 +570,7 @@
                         </tbody>
                       </table>
                     </div>
+                    <MermaidDiagram v-else-if="block.kind === 'codeBlock' && isMermaidLanguage(block.language)" :source="block.value" :pending="(message.messageType ?? '').endsWith('.live')" />
                     <div v-else-if="block.kind === 'codeBlock'" class="message-code-block">
                       <div v-if="block.language" class="message-code-language">{{ block.language }}</div>
                       <pre class="message-code-pre"><code class="hljs" v-html="renderCachedHighlightedCodeAsHtml(block.language, block.value)"></code></pre>
@@ -924,6 +925,9 @@ import { updateThreadFileChanges } from '../../api/codexGateway'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard, copyTextWithSelectionFallback } from '../../utils/clipboard'
+import MermaidDiagram from './MermaidDiagram.vue'
+import { isMermaidLanguage } from '../../utils/mermaidRenderer'
+import { vMermaid } from '../../utils/mermaidDirective'
 
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
@@ -3736,6 +3740,7 @@ function renderMessageBlockAsHtml(block: MessageBlock): string {
     return `<div class="message-table-wrap"><table class="message-table"><thead><tr>${headerCells}</tr></thead>${body}</table></div>`
   }
   if (block.kind === 'codeBlock') {
+    if (isMermaidLanguage(block.language)) return `<div class="message-mermaid-host"><pre>${escapeHtml(block.value)}</pre></div>`
     const language = block.language
       ? `<div class="message-code-language">${escapeHtml(block.language)}</div>`
       : ''

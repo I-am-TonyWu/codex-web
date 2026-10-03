@@ -1941,3 +1941,10 @@
 :root.dark .search-dropdown-full-description { color: #d4d4d8; }
 :root.dark .search-dropdown-status { color: #a1a1aa; }
 :root.dark .search-dropdown-expand { color: #7dd3fc; }
+
+/* Mermaid cards also appear in plan/list HTML and in a body-level preview. */
+:root.dark .mermaid-card, :root.dark .mermaid-modal { background: #18181b; color: #e4e4e7; border-color: #3f3f46; }
+:root.dark .mermaid-toolbar { border-color: #3f3f46; }
+:root.dark .mermaid-toolbar button, :root.dark .mermaid-error button { border-color: #52525b; }
+:root.dark .mermaid-toolbar button:hover, :root.dark .mermaid-error button:hover { background: #3f3f46; }
+:root.dark .mermaid-status { color: #a1a1aa; }

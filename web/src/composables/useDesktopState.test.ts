@@ -25,6 +25,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getThreadQueueState: vi.fn(),
   getThreadTitleCache: vi.fn(),
   getWorkspaceRootsState: vi.fn(),
+  mutateLocalProject: vi.fn(),
   generateThreadTitle: vi.fn(),
   interruptThreadTurn: vi.fn(),
   persistThreadTitle: vi.fn(),
@@ -91,6 +92,61 @@ afterEach(() => {
 })
 
 describe('filterGroupsByWorkspaceRoots', () => {
+  it('refreshes project names, ordering and removals while preserving the last sidebar on network failure', async () => {
+    const state = useDesktopState()
+    const roots: WorkspaceRootsState = { order: ['/tmp/alpha'], labels: {}, active: [], projectOrder: ['alpha'], localProjects: [{ id: 'alpha', name: '初始名称', rootPaths: ['/tmp/alpha'] }] }
+    gatewayMocks.getWorkspaceRootsState.mockResolvedValue(roots)
+    await Promise.all([state.refreshWorkspaceProjects(), state.refreshWorkspaceProjects()])
+    expect(gatewayMocks.getWorkspaceRootsState).toHaveBeenCalledTimes(1)
+    expect(state.projectDisplayNameById.value.alpha).toBe('初始名称')
+    gatewayMocks.getWorkspaceRootsState.mockResolvedValue({ ...roots, localProjects: [{ ...roots.localProjects![0], name: '新名称' }, { id: 'empty', name: '空项目', rootPaths: [] }], projectOrder: ['empty', 'alpha'] })
+    await state.refreshWorkspaceProjects()
+    expect(state.projectGroups.value.map((group) => group.projectName)).toEqual(['empty', 'alpha'])
+    expect(state.projectDisplayNameById.value.alpha).toBe('新名称')
+    gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('offline'))
+    await state.refreshWorkspaceProjects()
+    expect(state.projectGroups.value.map((group) => group.projectName)).toEqual(['empty', 'alpha'])
+    gatewayMocks.getWorkspaceRootsState.mockResolvedValue({ ...roots, order: [], localProjects: [], projectOrder: [] })
+    await state.refreshWorkspaceProjects()
+    expect(state.projectGroups.value).toEqual([])
+  })
+  it('groups by desktop IDs instead of thread cwd, including empty projects and explicit projectless tasks', () => {
+    const state: WorkspaceRootsState = {
+      order: ['C:/New/alpha', 'C:/New/beta'], labels: {}, active: [], projectOrder: ['beta', 'alpha'],
+      localProjects: [{ id: 'alpha', name: '中文名称', rootPaths: ['C:/New/alpha'] }, { id: 'beta', name: 'Beta', rootPaths: ['C:/New/beta'] }],
+      threadProjectAssignments: { moved: 'alpha' }, projectlessThreadIds: ['free'], projectThreadOrders: { alpha: ['inside', 'moved'] },
+    }
+    const source = [{ projectName: 'old', threads: [thread('moved', 'C:/Old/folder'), thread('inside', 'c:/NEW/ALPHA/sub'), thread('free', 'C:/New/alpha')] }]
+    const groups = filterGroupsByWorkspaceRoots(source, state)
+    expect(groups.map((group) => [group.projectName, group.threads.map((row) => row.id)])).toEqual([
+      ['beta', []], ['alpha', ['inside', 'moved']], ['Projectless', ['free']],
+    ])
+    expect(groups[1]?.threads[1]?.cwd).toBe('C:/Old/folder')
+    expect(groups[2]?.threads[0]?.projectMembership).toBe('projectless')
+    expect(source[0]?.threads[0]?.projectName).toBe('folder')
+  })
+  it('keeps same-name modern projects separate and chooses the most specific registered root', () => {
+    const state: WorkspaceRootsState = {
+      order: ['/tmp/api', '/tmp/api/nested'], labels: {}, active: [], projectOrder: ['parent', 'nested'],
+      localProjects: [{ id: 'parent', name: 'Same', rootPaths: ['/tmp/api'] }, { id: 'nested', name: 'Same', rootPaths: ['/tmp/api/nested'] }],
+    }
+    const source = [{ projectName: 'api', threads: [thread('parent-thread', '/tmp/api'), thread('nested-thread', '/tmp/api/nested/src'), thread('outside', '/tmp/apix')] }]
+    expect(filterGroupsByWorkspaceRoots(source, state).map((group) => [group.projectName, group.threads.map((row) => row.id)])).toEqual([
+      ['parent', ['parent-thread']], ['nested', ['nested-thread']], ['Projectless', ['outside']],
+    ])
+  })
+  it('honors explicit assignments even for projectless execution directories and deduplicates history', () => {
+    const state: WorkspaceRootsState = { order: ['/tmp/api'], labels: {}, active: [], projectOrder: ['project'],
+      localProjects: [{ id: 'project', name: 'API', rootPaths: ['/tmp/api'] }], threadProjectAssignments: { one: 'project' } }
+    const row = thread('one', '')
+    const groups = filterGroupsByWorkspaceRoots([{ projectName: 'Projectless', threads: [row, row] }], state)
+    expect(groups[0]?.threads).toHaveLength(1)
+    expect(groups[0]?.threads[0]?.projectMembership).toBe('project')
+  })
+  it('does not resurrect removed legacy workspace roots when the modern project list is empty', () => {
+    const state: WorkspaceRootsState = { order: [], labels: {}, active: [], projectOrder: [], localProjects: [] }
+    expect(filterGroupsByWorkspaceRoots([{ projectName: 'deleted', threads: [thread('old', '/tmp/deleted')] }], state).map((group) => group.projectName)).toEqual(['Projectless'])
+  })
   it('keeps projectless chats visible when workspace roots are configured', () => {
     const groups: UiProjectGroup[] = [
       {

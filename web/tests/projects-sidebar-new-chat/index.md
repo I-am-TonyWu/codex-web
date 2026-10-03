@@ -24,3 +24,4 @@ Return to the [manual test index](../../tests.md).
 | [Sidebar sessions survive symlinked workspace roots](sidebar-sessions-survive-symlinked-workspace-roots.md) |
 | [Sidebar scroll position survives collapse](sidebar-scroll-position-survives-collapse.md) |
 | [Toolbar new thread keeps active project](toolbar-new-thread-keeps-active-project.md) |
+| [Feature: Desktop project ID synchronization](desktop-project-id-synchronization.md) |

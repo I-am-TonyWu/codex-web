@@ -25,6 +25,7 @@ import {
   getThreadGroupsPage,
   getThreadQueueState,
   getWorkspaceRootsState,
+  mutateLocalProject,
   setCodexSpeedMode,
   setThreadQueueState,
   setWorkspaceRootsState,
@@ -63,7 +64,7 @@ import type {
   UiTokenUsageBreakdown,
   UiThread,
 } from '../types/codex'
-import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
+import { getPathParent, isProjectlessChatPath, normalizePathForUi, normalizePathForComparison, toProjectName } from '../pathUtils.js'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
@@ -943,6 +944,7 @@ function areThreadFieldsEqual(first: UiThread, second: UiThread): boolean {
     first.id === second.id &&
     first.title === second.title &&
     first.projectName === second.projectName &&
+    first.projectMembership === second.projectMembership &&
     first.cwd === second.cwd &&
     first.createdAtIso === second.createdAtIso &&
     first.updatedAtIso === second.updatedAtIso &&
@@ -1100,6 +1102,10 @@ function getRemoteProjectById(rootsState: WorkspaceRootsState | null): Map<strin
 
 function getWorkspaceProjectOrderPaths(rootsState: WorkspaceRootsState | null): string[] {
   if (!rootsState) return []
+  if (rootsState.localProjects !== undefined) {
+    const ids = [...rootsState.localProjects.map((project) => project.id), ...(rootsState.remoteProjects ?? []).map((project) => project.id)]
+    return [...new Set([...rootsState.projectOrder.filter((id) => ids.includes(id)), ...ids])]
+  }
   const savedRoots = new Set(rootsState.order)
   const remoteProjectIds = new Set((rootsState.remoteProjects ?? []).map((project) => project.id))
   const orderedRoots = rootsState.projectOrder.filter((item) => savedRoots.has(item) || remoteProjectIds.has(item))
@@ -1118,6 +1124,7 @@ function getWorkspaceProjectOrderNames(
 ): string[] {
   const remoteProjectsById = getRemoteProjectById(rootsState)
   return getWorkspaceProjectOrderPaths(rootsState).map((rootPath) => {
+    if (rootsState?.localProjects?.some((project) => project.id === rootPath)) return rootPath
     if (remoteProjectsById.has(rootPath)) return rootPath
     const normalizedRootPath = normalizePathForUi(rootPath).trim()
     const leafName = toProjectNameFromWorkspaceRoot(normalizedRootPath)
@@ -1135,6 +1142,8 @@ export function collectWorkspaceRootPathsForProjectRemoval(
   projectName: string,
 ): Set<string> {
   const removedRootPaths = new Set<string>()
+  const project = rootsState.localProjects?.find((item) => item.id === projectName)
+  if (project) return new Set(project.rootPaths)
   for (const rootPath of rootsState.order) {
     if (matchesWorkspaceRootProject(rootPath, projectName)) {
       removedRootPaths.add(rootPath)
@@ -1180,6 +1189,10 @@ export function buildWorkspaceRootsProjectOrderState(
   }
 
   for (const projectName of orderedProjectNames) {
+    if (rootsState.localProjects?.some((project) => project.id === projectName)) {
+      pushProjectOrderItem(projectName)
+      continue
+    }
     if (remoteProjectIds.has(projectName)) {
       pushProjectOrderItem(projectName)
       continue
@@ -1381,6 +1394,7 @@ export function filterGroupsByWorkspaceRoots(
   groups: UiProjectGroup[],
   rootsState: WorkspaceRootsState | null,
 ): UiProjectGroup[] {
+  if (rootsState?.localProjects !== undefined) return groupThreadsByDesktopProjects(groups, rootsState)
   const duplicateLeafNames = collectDuplicateProjectLeafNames(groups, rootsState)
   const disambiguatedGroups = disambiguateProjectGroupsByCwd(groups, rootsState)
   const groupsWithWorkspaceRoots = addWorkspaceRootPlaceholderGroups(disambiguatedGroups, rootsState, duplicateLeafNames)
@@ -1393,8 +1407,41 @@ export function filterGroupsByWorkspaceRoots(
   return orderGroupsByWorkspaceProjectOrder(filteredGroups, rootsState, duplicateLeafNames)
 }
 
+export function groupThreadsByDesktopProjects(groups: UiProjectGroup[], state: WorkspaceRootsState): UiProjectGroup[] {
+  const projects = state.localProjects ?? []
+  const rows = new Map<string, UiProjectGroup>(projects.map((project) => [project.id, { projectName: project.id, threads: [] }]))
+  for (const project of state.remoteProjects ?? []) rows.set(project.id, { projectName: project.id, threads: [] })
+  const projectlessIds = new Set(state.projectlessThreadIds ?? [])
+  const seenThreads = new Set<string>()
+  const comparablePath = (path: string): string => {
+    return normalizePathForComparison(path).replace(/\/$/u, '')
+  }
+  const roots = projects.flatMap((project) => project.rootPaths.map((path) => ({ id: project.id, path: comparablePath(path) })))
+    .filter((root) => !!root.path).sort((a, b) => b.path.length - a.path.length)
+  for (const thread of flattenThreads(groups)) {
+    if (seenThreads.has(thread.id)) continue
+    seenThreads.add(thread.id)
+    const cwd = comparablePath(thread.cwd)
+    const assignment = state.threadProjectAssignments?.[thread.id]
+    const root = roots.find((item) => cwd === item.path || cwd.startsWith(`${item.path}/`))
+    const projectId = projectlessIds.has(thread.id) ? undefined : (assignment && rows.has(assignment) ? assignment : root?.id)
+    const projectName = projectId ?? 'Projectless'
+    const row = rows.get(projectName) ?? { projectName, threads: [] }
+    row.threads.push({ ...thread, projectName, projectMembership: projectId ? 'project' : 'projectless' })
+    rows.set(projectName, row)
+  }
+  for (const [id, row] of rows) {
+    const order = new Map((state.projectThreadOrders?.[id] ?? []).map((threadId, index) => [threadId, index]))
+    if (order.size) row.threads.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity))
+  }
+  const projectOrder = getWorkspaceProjectOrderPaths(state)
+  const orderedIds = [...projectOrder, ...[...rows.keys()].filter((id) => !projectOrder.includes(id))]
+  return orderedIds.map((id) => rows.get(id)!).filter(Boolean)
+}
+
 export function useDesktopState() {
   const projectGroups = ref<UiProjectGroup[]>([])
+  const workspaceRootsState = ref<WorkspaceRootsState | null>(null)
   const sourceGroups = ref<UiProjectGroup[]>([])
   const selectedThreadId = ref(loadSelectedThreadId())
   const persistedMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
@@ -1517,6 +1564,8 @@ export function useDesktopState() {
     return ''
   }
   let stopNotificationStream: (() => void) | null = null
+  let projectSyncTimer: number | null = null
+  let projectSyncPromise: Promise<void> | null = null
   let eventSyncTimer: number | null = null
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
@@ -2198,11 +2247,13 @@ export function useDesktopState() {
   function insertOptimisticThread(threadId: string, cwd: string, firstMessageText: string): void {
     const nowIso = new Date().toISOString()
     const normalizedCwd = normalizePathForUi(cwd)
-    const projectName = toProjectName(normalizedCwd)
+    const matchedProject = workspaceRootsState.value?.localProjects?.find((project) => project.rootPaths.some((path) => normalizePathForComparison(path) === normalizePathForComparison(normalizedCwd)))
+    const projectName = matchedProject?.id ?? toProjectName(normalizedCwd)
     const nextThread: UiThread = {
       id: threadId,
       title: toOptimisticThreadTitle(firstMessageText),
       projectName,
+      ...(matchedProject ? { projectMembership: 'project' as const } : {}),
       cwd: normalizedCwd,
       hasWorktree: normalizedCwd.includes('/.codex/worktrees/') || normalizedCwd.includes('/.git/worktrees/'),
       createdAtIso: nowIso,
@@ -4045,7 +4096,8 @@ export function useDesktopState() {
     groups: UiProjectGroup[],
     rootsState: WorkspaceRootsState | null,
   ): Promise<void> {
-    if (hasHydratedWorkspaceRootsState) return
+    // Modern project names can change while the web page is open.
+    if (hasHydratedWorkspaceRootsState && rootsState?.localProjects === undefined) return
     hasHydratedWorkspaceRootsState = true
 
     try {
@@ -4066,9 +4118,14 @@ export function useDesktopState() {
         }
       }
 
-      if (Object.keys(rootsState.labels).length > 0 || (rootsState.remoteProjects ?? []).length > 0) {
+      if (Object.keys(rootsState.labels).length > 0 || (rootsState.remoteProjects ?? []).length > 0 || rootsState.localProjects) {
         const nextLabels = { ...projectDisplayNameById.value }
         let changed = false
+        for (const project of rootsState.localProjects ?? []) {
+          if (nextLabels[project.id] === project.name) continue
+          nextLabels[project.id] = project.name
+          changed = true
+        }
         for (const [rootPath, label] of Object.entries(rootsState.labels)) {
           const normalizedRootPath = normalizePathForUi(rootPath).trim()
           const projectNames = [toProjectNameFromWorkspaceRoot(rootPath)]
@@ -4117,9 +4174,11 @@ export function useDesktopState() {
 
   async function loadWorkspaceRootsStateForThreadList(): Promise<WorkspaceRootsState | null> {
     try {
-      return await getWorkspaceRootsState()
+      const state = await getWorkspaceRootsState()
+      workspaceRootsState.value = state
+      return state
     } catch {
-      return null
+      return workspaceRootsState.value
     }
   }
 
@@ -4143,6 +4202,7 @@ export function useDesktopState() {
     groups: UiProjectGroup[],
     rootsState: WorkspaceRootsState | null,
   ): UiProjectGroup[] {
+    if (rootsState?.localProjects !== undefined) return groupThreadsByDesktopProjects(groups, rootsState)
     const duplicateLeafNames = collectDuplicateProjectLeafNames(groups, rootsState)
     const disambiguatedGroups = disambiguateProjectGroupsByCwd(groups, rootsState)
     const groupsWithWorkspaceRoots = addWorkspaceRootPlaceholderGroups(disambiguatedGroups, rootsState, duplicateLeafNames)
@@ -4303,13 +4363,13 @@ export function useDesktopState() {
       hasLoadedAllThreadPages = page.nextCursor === null
       isThreadListFullyLoaded.value = hasLoadedAllThreadPages
       loadedThreadListGroups = mergeThreadGroupPages(loadedThreadListGroups, page.groups)
-      applyThreadGroups(loadedThreadListGroups, rootsState)
+      applyThreadGroups(loadedThreadListGroups, loadedThreadListRootsState ?? rootsState)
     } catch {
       // Keep the first page usable; a later refresh can retry remaining pages.
     } finally {
       isLoadingRemainingThreadPages = false
       if (threadListNextCursor && !hasActiveInProgressThreads()) {
-        scheduleRemainingThreadPages(rootsState)
+        scheduleRemainingThreadPages(loadedThreadListRootsState ?? rootsState)
       }
     }
   }
@@ -5278,6 +5338,11 @@ export function useDesktopState() {
   async function persistProjectLabelToGlobalState(projectName: string, displayName: string): Promise<void> {
     try {
       const rootsState = await getWorkspaceRootsState()
+      if (rootsState.localProjects?.some((project) => project.id === projectName)) {
+        await mutateLocalProject({ type: 'rename', projectId: projectName, name: displayName })
+        await refreshWorkspaceProjects()
+        return
+      }
       const nextLabels = { ...rootsState.labels }
       let changed = false
       for (const rootPath of rootsState.order) {
@@ -5327,6 +5392,13 @@ export function useDesktopState() {
 
   async function removeProject(projectName: string): Promise<void> {
     if (projectName.length === 0) return
+    if (workspaceRootsState.value?.localProjects?.some((project) => project.id === projectName)) {
+      try {
+        await mutateLocalProject({ type: 'remove', projectId: projectName })
+        await refreshWorkspaceProjects()
+      } catch (failure) { error.value = failure instanceof Error ? failure.message : 'Failed to remove project' }
+      return
+    }
 
     const nextProjectOrder = projectOrder.value.filter((name) => name !== projectName)
     if (!areStringArraysEqual(projectOrder.value, nextProjectOrder)) {
@@ -5425,6 +5497,11 @@ export function useDesktopState() {
   async function persistProjectOrderToWorkspaceRoots(): Promise<void> {
     try {
       const rootsState = await getWorkspaceRootsState()
+      if (rootsState.localProjects !== undefined) {
+        await mutateLocalProject({ type: 'reorder', projectIds: projectOrder.value })
+        await refreshWorkspaceProjects()
+        return
+      }
       const nextState = buildWorkspaceRootsProjectOrderState(rootsState, projectOrder.value, sourceGroups.value)
 
       await setWorkspaceRootsState({
@@ -5536,10 +5613,42 @@ export function useDesktopState() {
     await syncFromNotifications()
   }
 
+  function refreshWorkspaceProjects(): Promise<void> {
+    if (projectSyncPromise) return projectSyncPromise
+    projectSyncPromise = (async () => {
+      try {
+        const next = await getWorkspaceRootsState()
+        if (JSON.stringify(next) === JSON.stringify(workspaceRootsState.value)) return
+        workspaceRootsState.value = next
+        loadedThreadListRootsState = next
+        await hydrateWorkspaceRootsStateIfNeeded(loadedThreadListGroups, next)
+        applyThreadGroups(loadedThreadListGroups, next)
+        // Membership changes may accompany new desktop threads; fetch one list page.
+        if (hasLoadedThreads.value) await loadThreads({ force: true })
+      } catch {
+        // Preserve the last successful sidebar during temporary network failures.
+      }
+    })().finally(() => { projectSyncPromise = null })
+    return projectSyncPromise
+  }
+
+  function scheduleProjectSync(): void {
+    if (typeof window === 'undefined' || projectSyncTimer !== null) return
+    projectSyncTimer = window.setTimeout(() => {
+      projectSyncTimer = null
+      const refresh = typeof document !== 'undefined' && document.visibilityState === 'hidden' ? Promise.resolve() : refreshWorkspaceProjects()
+      void refresh.finally(() => {
+        if (stopNotificationStream) scheduleProjectSync()
+      })
+    }, 5000)
+  }
+
   function startPolling(): void {
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
+    if (hasLoadedThreads.value) void refreshWorkspaceProjects()
+    scheduleProjectSync()
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (notification.method === 'ready') {
@@ -5579,6 +5688,10 @@ export function useDesktopState() {
   }
 
   function stopPolling(): void {
+    if (projectSyncTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(projectSyncTimer)
+      projectSyncTimer = null
+    }
     if (stopNotificationStream) {
       stopNotificationStream()
       stopNotificationStream = null
@@ -5684,6 +5797,8 @@ export function useDesktopState() {
 
   return {
     projectGroups,
+    workspaceRootsState,
+    refreshWorkspaceProjects,
     projectDisplayNameById,
     selectedThread,
     selectedThreadTokenUsage,

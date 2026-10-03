@@ -16,6 +16,8 @@ Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) 
 
 ## Local quick start
 
+Desktop project synchronization supports modern project IDs, names, ordering, empty projects, and explicit thread membership. Visible pages check project metadata approximately every five seconds and refresh on foreground return. Project roots and historical thread working directories remain separate. ChatGPT cloud chat projects are outside the local work backend.
+
 1. Open Codex on the host, sign in, and confirm it works.
 2. Place `CodexWebTray.exe` in a permanent directory such as `C:\Tools\codex-web\` and run it. If you move it after enabling autostart, update autostart from Settings.
 3. Find its notification-area icon (possibly under hidden icons), right-click, and choose **设置 / Settings**. The current application UI is primarily Chinese.

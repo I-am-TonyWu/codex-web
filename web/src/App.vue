@@ -81,6 +81,7 @@
           </button>
 
           <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
+            :local-project-ids="workspaceRootsState?.localProjects?.map(project => project.id)"
             :project-git-repo-by-name="projectGitRepoByName"
             :project-cwd-by-name="projectCwdByName"
             v-if="!isSidebarCollapsed"
@@ -602,6 +603,7 @@
               :groups="projectGroups"
               :project-cwd-by-name="projectCwdByName"
               :project-display-name-by-id="projectDisplayNameById"
+              :local-project-ids="workspaceRootsState?.localProjects?.map(project => project.id)"
               :selected-automation-id="routeAutomationId"
               @select-automation="onSelectAutomationInPanel"
               @edit-automation="onEditAutomationFromPanel"
@@ -1247,6 +1249,7 @@ import {
   getThreadTerminalStatus,
   getThreadGoal,
   getWorkspaceRootsState,
+  type WorkspaceRootsState,
   importProjectZip,
   listLocalDirectories,
   openProjectRoot,
@@ -1442,6 +1445,8 @@ const WHISPER_LANGUAGES: Record<string, string> = {
 
 const {
   projectGroups,
+  workspaceRootsState,
+  refreshWorkspaceProjects,
   projectDisplayNameById,
   selectedThread,
   selectedThreadTokenUsage,
@@ -1565,10 +1570,12 @@ const gitRepoStatusRequestByCwd = new Map<string, Promise<boolean>>()
 const newWorktreeBaseBranch = ref('')
 const worktreeBranchOptions = ref<WorktreeBranchOption[]>([])
 const isLoadingWorktreeBranches = ref(false)
-const workspaceRootOptionsState = ref<{ order: string[]; labels: Record<string, string>; projectOrder: string[] }>({
+const workspaceRootOptionsState = computed<WorkspaceRootsState>(() => workspaceRootsState.value ?? {
   order: [],
   labels: {},
+  active: [],
   projectOrder: [],
+  localProjects: undefined,
 })
 const projectZipExportStatus = ref<{ phase: 'idle' | 'exporting' | 'ready'; loaded: number; total: number | null; blob: Blob | null; fileName: string; error: string }>({
   phase: 'idle',
@@ -1937,7 +1944,10 @@ function getFolderOptionLabel(path: string, fallbackLabel = ''): string {
 
 function getOrderedWorkspaceRootOptions(): string[] {
   const savedRoots = new Set(workspaceRootOptionsState.value.order)
-  const orderedRoots = workspaceRootOptionsState.value.projectOrder.filter((item) => savedRoots.has(item))
+  const orderedRoots = workspaceRootOptionsState.value.projectOrder.flatMap((item) => {
+    const project = workspaceRootsState.value?.localProjects?.find((project) => project.id === item)
+    return project ? project.rootPaths : savedRoots.has(item) ? [item] : []
+  })
   for (const rootPath of workspaceRootOptionsState.value.order) {
     if (!orderedRoots.includes(rootPath)) orderedRoots.push(rootPath)
   }
@@ -1954,6 +1964,8 @@ function getProjectOrderNameForPath(path: string): string {
 }
 
 function resolveWorkspaceRootCwd(projectName: string): string {
+  const project = workspaceRootsState.value?.localProjects?.find((item) => item.id === projectName)
+  if (project) return project.rootPaths[0] ?? ''
   const normalizedProjectName = normalizePathForUi(projectName).trim()
   if (!normalizedProjectName) return ''
   const knownPaths = [
@@ -1987,7 +1999,7 @@ const newThreadFolderOptions = computed(() => {
   }
 
   for (const group of projectGroups.value) {
-    const cwd = group.threads[0]?.cwd?.trim() ?? ''
+    const cwd = resolveWorkspaceRootCwd(group.projectName) || group.threads[0]?.cwd?.trim() || ''
     if (!cwd || seenCwds.has(cwd) || isProjectlessChatPath(cwd)) continue
     seenCwds.add(cwd)
     options.push({
@@ -2868,6 +2880,7 @@ function isWorktreePath(cwdRaw: string): boolean {
 }
 
 function resolvePreferredLocalCwd(projectName: string, fallbackCwd = ''): string {
+  if (workspaceRootsState.value?.localProjects?.some((project) => project.id === projectName)) return resolveWorkspaceRootCwd(projectName)
   const group = projectGroups.value.find((row) => row.projectName === projectName)
   if (!group) return resolveWorkspaceRootCwd(projectName) || fallbackCwd.trim()
   const nonWorktreeThread = group.threads.find((thread) => !isWorktreePath(thread.cwd))
@@ -3467,6 +3480,7 @@ function onSettingsAreaClick(event: MouseEvent): void {
 
 function onDocumentVisibilityChange(): void {
   if (typeof document === 'undefined') return
+  if (document.visibilityState === 'visible') void refreshWorkspaceProjects()
   if (!isMobile.value) return
 
   if (document.visibilityState === 'hidden') {
@@ -3480,10 +3494,12 @@ function onDocumentVisibilityChange(): void {
 
 function onWindowPageShow(event: PageTransitionEvent): void {
   if (!event.persisted) return
+  void refreshWorkspaceProjects()
   maybeSyncAfterMobileResume()
 }
 
 function onWindowFocus(): void {
+  void refreshWorkspaceProjects()
   void refreshSkills({ force: true })
   if (route.name === 'home') {
     void loadWorkspaceRootOptionsState()
@@ -4165,13 +4181,9 @@ async function loadHomeDirectory(): Promise<void> {
 async function loadWorkspaceRootOptionsState(): Promise<void> {
   try {
     const state = await getWorkspaceRootsState()
-    workspaceRootOptionsState.value = {
-      order: [...state.order],
-      labels: { ...state.labels },
-      projectOrder: [...state.projectOrder],
-    }
+    workspaceRootsState.value = state
   } catch {
-    workspaceRootOptionsState.value = { order: [], labels: {}, projectOrder: [] }
+    // Retain the last successful project/folder state on transient failures.
   }
 }
 

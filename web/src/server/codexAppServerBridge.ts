@@ -50,7 +50,8 @@ import {
   resolveRipgrepCommand,
 } from '../commandResolution.js'
 import type { CollaborationModeKind, ReasoningEffort } from '../types/codex.js'
-import { isAbsoluteLikePath } from '../pathUtils.js'
+import { isAbsoluteLikePath, normalizePathForComparison } from '../pathUtils.js'
+import { applyLocalProjectMutation, readDesktopProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -87,7 +88,7 @@ type ServerRequestReply = {
   }
 }
 
-export type WorkspaceRootsState = {
+export type WorkspaceRootsState = DesktopProjectMetadata & {
   order: string[]
   labels: Record<string, string>
   active: string[]
@@ -5422,16 +5423,25 @@ export async function canonicalizeWorkspaceRootsState(
   state: WorkspaceRootsState,
   pathRealpath: PathRealpathResolver = realpath,
 ): Promise<WorkspaceRootsState> {
+  const resolvedPaths = new Map<string, Promise<string>>()
+  const cachedRealpath: PathRealpathResolver = (path) => {
+    let result = resolvedPaths.get(path)
+    if (!result) { result = pathRealpath(path); resolvedPaths.set(path, result) }
+    return result
+  }
+  const localProjects = state.localProjects ? await Promise.all(state.localProjects.map(async (project) => ({
+    ...project, rootPaths: await canonicalizeWorkspaceRootPathList(project.rootPaths, cachedRealpath),
+  }))) : undefined
   const [order, active, projectOrder] = await Promise.all([
-    canonicalizeWorkspaceRootPathList(state.order, pathRealpath),
-    canonicalizeWorkspaceRootPathList(state.active, pathRealpath),
-    canonicalizeWorkspaceRootPathList(state.projectOrder, pathRealpath),
+    canonicalizeWorkspaceRootPathList(state.order, cachedRealpath),
+    canonicalizeWorkspaceRootPathList(state.active, cachedRealpath),
+    canonicalizeWorkspaceRootPathList(state.projectOrder, cachedRealpath),
   ])
   const labelEntries = await Promise.all(
     Object.entries(state.labels)
       .sort(([first], [second]) => first.localeCompare(second))
       .map(async ([key, label]) => {
-        const canonicalKey = await canonicalizeWorkspaceRootPath(key, pathRealpath)
+        const canonicalKey = await canonicalizeWorkspaceRootPath(key, cachedRealpath)
         return {
           canonicalKey,
           label,
@@ -5452,6 +5462,8 @@ export async function canonicalizeWorkspaceRootsState(
   }
 
   return {
+    ...state,
+    ...(localProjects ? { localProjects } : {}),
     order,
     labels,
     active,
@@ -5499,7 +5511,7 @@ export async function canonicalizeThreadListResponseForRead(
   }
 }
 
-async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
+export async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
   const statePath = getCodexGlobalStatePath()
   let payload: Record<string, unknown> = {}
 
@@ -5507,36 +5519,71 @@ async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
     const raw = await readFile(statePath, 'utf8')
     const parsed = JSON.parse(raw) as unknown
     payload = asRecord(parsed) ?? {}
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     payload = {}
   }
 
+  const metadata = readDesktopProjectMetadata(payload)
+  const projects = metadata.localProjects
+  const order = projects ? [...new Set(projects.flatMap((project) => project.rootPaths))] : normalizeStringArray(payload['electron-saved-workspace-roots'])
+  const labels = projects ? Object.fromEntries(projects.flatMap((project) => project.rootPaths.map((path) => [path, project.name]))) : normalizeStringRecord(payload['electron-workspace-root-labels'])
+  const validIds = new Set(projects?.map((project) => project.id))
+  const remoteProjects = normalizeRemoteProjects(payload['remote-projects'])
+  remoteProjects.forEach((project) => validIds.add(project.id))
+  const projectOrder = projects ? [...new Set([...normalizeStringArray(payload['project-order']).filter((id) => validIds.has(id)), ...validIds])] : normalizeStringArray(payload['project-order'])
   return await canonicalizeWorkspaceRootsState({
-    order: normalizeStringArray(payload['electron-saved-workspace-roots']),
-    labels: normalizeStringRecord(payload['electron-workspace-root-labels']),
+    ...metadata,
+    order,
+    labels,
     active: normalizeStringArray(payload['active-workspace-roots']),
-    projectOrder: normalizeStringArray(payload['project-order']),
-    remoteProjects: normalizeRemoteProjects(payload['remote-projects']),
+    projectOrder,
+    remoteProjects,
   })
 }
 
 export async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise<void> {
   const state = await canonicalizeWorkspaceRootsState(nextState)
   const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
+  const snapshot = await readWorkspaceStateSnapshot(statePath)
+  const payload = snapshot === null ? {} : asRecord(JSON.parse(snapshot))
+  if (!payload) throw new Error('Invalid desktop workspace state; refusing to overwrite it')
 
   payload['electron-saved-workspace-roots'] = normalizeStringArray(state.order)
   payload['electron-workspace-root-labels'] = normalizeStringRecord(state.labels)
   payload['active-workspace-roots'] = normalizeStringArray(state.active)
   payload['project-order'] = normalizeStringArray(state.projectOrder)
 
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  // Project imports from the web must also exist in the desktop's new project store.
+  if (readDesktopProjectMetadata(payload).localProjects !== undefined) {
+    const projects = { ...(asRecord(payload['local-projects']) ?? {}) }
+    const knownRoots = new Set(readDesktopProjectMetadata(payload).localProjects?.flatMap((project) => project.rootPaths.map(normalizePathForComparison)))
+    for (const path of state.order) {
+      if (knownRoots.has(normalizePathForComparison(path))) continue
+      const id = randomUUID()
+      const now = Date.now()
+      projects[id] = { id, name: state.labels[path] || basename(path), rootPaths: [path], createdAt: now, updatedAt: now }
+      knownRoots.add(normalizePathForComparison(path))
+      payload['project-order'] = prependUniqueString(id, normalizeStringArray(payload['project-order']))
+    }
+    payload['local-projects'] = projects
+  }
+
+  await writeWorkspaceStateSnapshot(statePath, snapshot, payload)
+}
+
+async function readWorkspaceStateSnapshot(path: string): Promise<string | null> {
+  try { return await readFile(path, 'utf8') }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+}
+
+export async function writeWorkspaceStateSnapshot(path: string, snapshot: string | null, next: Record<string, unknown>): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, JSON.stringify(next), { encoding: 'utf8', mode: 0o600 })
+    if (await readWorkspaceStateSnapshot(path) !== snapshot) throw new Error('Desktop projects changed; refresh and retry')
+    await rename(temporaryPath, path)
+  } finally { await rm(temporaryPath, { force: true }).catch(() => undefined) }
 }
 
 let workspaceRootsMutation: Promise<void> = Promise.resolve()
@@ -7956,6 +8003,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/workspace-roots-state') {
+        res.setHeader('Cache-Control', 'no-store')
         const state = await readWorkspaceRootsState()
         setJson(res, 200, { data: state })
         return
@@ -8556,6 +8604,21 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             : existingState.projectOrder,
           remoteProjects: existingState.remoteProjects,
         }))
+        setJson(res, 200, { ok: true })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/local-project') {
+        const mutation = asRecord(await readJsonBody(req))
+        const valid = mutation && ((mutation.type === 'reorder' && Array.isArray(mutation.projectIds) && mutation.projectIds.every((id) => typeof id === 'string'))
+          || ((mutation.type === 'rename' || mutation.type === 'remove') && typeof mutation.projectId === 'string' && (mutation.type !== 'rename' || typeof mutation.name === 'string')))
+        if (!valid) { setJson(res, 400, { error: 'Invalid local project mutation' }); return }
+        await queueWorkspaceRootsMutation(async () => {
+          const path = getCodexGlobalStatePath()
+          const snapshot = await readFile(path, 'utf8')
+          const next = applyLocalProjectMutation(asRecord(JSON.parse(snapshot)) ?? {}, mutation as LocalProjectMutation)
+          await writeWorkspaceStateSnapshot(path, snapshot, next)
+        })
         setJson(res, 200, { ok: true })
         return
       }

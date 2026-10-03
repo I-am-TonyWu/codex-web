@@ -915,6 +915,7 @@ import { reconcilePinnedThreadIds } from './pinnedThreadUtils'
 const props = defineProps<{
   groups: UiProjectGroup[]
   projectDisplayNameById: Record<string, string>
+  localProjectIds?: string[]
   projectGitRepoByName: Record<string, boolean>
   projectCwdByName: Record<string, string>
   selectedThreadId: string
@@ -1264,9 +1265,13 @@ function threadMatchesSearch(thread: UiThread): boolean {
   return thread.title.toLowerCase().includes(q) || thread.preview.toLowerCase().includes(q)
 }
 
+function isProjectlessThread(thread: UiThread): boolean {
+  return thread.projectMembership ? thread.projectMembership === 'projectless' : isProjectlessChatPath(thread.cwd)
+}
+
 const filteredGroups = computed<UiProjectGroup[]>(() => {
   return props.groups.flatMap((group) => {
-    const threads = group.threads.filter((thread) => !isProjectlessChatPath(thread.cwd) && threadMatchesSearch(thread))
+    const threads = group.threads.filter((thread) => !isProjectlessThread(thread) && threadMatchesSearch(thread))
     if (threads.length > 0) return [{ ...group, threads }]
     return !isSearchActive.value && group.threads.length === 0 ? [{ ...group, threads }] : []
   })
@@ -1293,7 +1298,7 @@ const globalThreads = computed<UiThread[]>(() => {
 })
 
 const chatThreads = computed(() => {
-  const rows = globalThreads.value.filter((thread) => isProjectlessChatPath(thread.cwd))
+  const rows = globalThreads.value.filter(isProjectlessThread)
   const timestampKey = chatSortMode.value === 'created' ? 'createdAtIso' : 'updatedAtIso'
   return rows
     .sort((first, second) => {
@@ -2197,6 +2202,7 @@ function getProjectVisibleName(group: UiProjectGroup): string {
   const customDisplayName = props.projectDisplayNameById[group.projectName]
   const displayName = getProjectDisplayName(group.projectName)
   const projectName = group.projectName
+  if (props.localProjectIds?.includes(projectName)) return displayName
   if (customDisplayName && !isPathLikeProjectName(projectName) && projectName !== displayName) {
     if (displayName.includes(projectName) || /^[0-9a-f]{8}-[0-9a-f-]{27,}$/iu.test(projectName)) return displayName
     return `${displayName} ${projectName}`

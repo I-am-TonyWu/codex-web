@@ -1,4 +1,5 @@
 import type { ReasoningEffort as UiReasoningEffort } from '../types/codex'
+import { normalizeProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
 import { modelCapabilities } from './modelCapabilities'
 import type { ZenModelMetadata } from '../types/zenModels'
 import {
@@ -189,7 +190,7 @@ function normalizeCollaborationModeReasoningEffort(value: ReasoningEffort | '' |
   return value && value.length > 0 ? value : null
 }
 
-export type WorkspaceRootsState = {
+export type WorkspaceRootsState = DesktopProjectMetadata & {
   order: string[]
   labels: Record<string, string>
   active: string[]
@@ -2464,6 +2465,7 @@ function normalizeWorkspaceRootsState(payload: unknown): WorkspaceRootsState {
   }
 
   return {
+    ...normalizeProjectMetadata(record),
     order: normalizeArray(record.order).map((value) => normalizePathForUi(value)),
     labels,
     active: normalizeArray(record.active).map((value) => normalizePathForUi(value)),
@@ -2541,25 +2543,33 @@ function normalizeThreadQueueState(value: unknown): ThreadQueueState {
   return state
 }
 
-export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
-  if (cachedWorkspaceRootsState) {
+let workspaceRootsCachedAt = 0
+let workspaceRootsCacheGeneration = 0
+
+export async function getWorkspaceRootsState(options: { force?: boolean } = {}): Promise<WorkspaceRootsState> {
+  if (!options.force && cachedWorkspaceRootsState && Date.now() - workspaceRootsCachedAt < 1000) {
     return cloneWorkspaceRootsState(cachedWorkspaceRootsState)
   }
   if (!workspaceRootsStatePromise) {
-    workspaceRootsStatePromise = fetchWorkspaceRootsState()
+    const generation = workspaceRootsCacheGeneration
+    const request = fetchWorkspaceRootsState()
       .then((state) => {
-        cachedWorkspaceRootsState = state
+        if (generation === workspaceRootsCacheGeneration) {
+          cachedWorkspaceRootsState = state
+          workspaceRootsCachedAt = Date.now()
+        }
         return state
       })
       .finally(() => {
-        workspaceRootsStatePromise = null
+        if (workspaceRootsStatePromise === request) workspaceRootsStatePromise = null
       })
+    workspaceRootsStatePromise = request
   }
   return cloneWorkspaceRootsState(await workspaceRootsStatePromise)
 }
 
 async function fetchWorkspaceRootsState(): Promise<WorkspaceRootsState> {
-  const response = await fetch('/codex-api/workspace-roots-state')
+  const response = await fetch('/codex-api/workspace-roots-state', { cache: 'no-store' })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error('Failed to load workspace roots state')
@@ -2573,6 +2583,8 @@ async function fetchWorkspaceRootsState(): Promise<WorkspaceRootsState> {
 
 function cloneWorkspaceRootsState(state: WorkspaceRootsState): WorkspaceRootsState {
   return {
+    ...normalizeProjectMetadata(state),
+    ...(state.localProjects ? { localProjects: state.localProjects.map((project) => ({ ...project, rootPaths: project.rootPaths.map(normalizePathForUi) })) } : {}),
     order: [...state.order],
     labels: { ...state.labels },
     active: [...state.active],
@@ -2583,6 +2595,9 @@ function cloneWorkspaceRootsState(state: WorkspaceRootsState): WorkspaceRootsSta
 
 function invalidateWorkspaceRootsStateCache(): void {
   cachedWorkspaceRootsState = null
+  workspaceRootsCachedAt = 0
+  workspaceRootsCacheGeneration += 1
+  workspaceRootsStatePromise = null
 }
 
 export async function getThreadQueueState(): Promise<ThreadQueueState> {
@@ -3011,7 +3026,13 @@ export async function setWorkspaceRootsState(nextState: WorkspaceRootsState): Pr
   if (!response.ok) {
     throw new Error('Failed to save workspace roots state')
   }
-  cachedWorkspaceRootsState = cloneWorkspaceRootsState(nextState)
+  invalidateWorkspaceRootsStateCache()
+}
+
+export async function mutateLocalProject(mutation: LocalProjectMutation): Promise<void> {
+  const response = await fetch('/codex-api/local-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mutation) })
+  if (!response.ok) throw new Error('Failed to update desktop project; refresh and retry')
+  invalidateWorkspaceRootsStateCache()
 }
 
 export async function openProjectRoot(path: string, options?: { createIfMissing?: boolean; label?: string }): Promise<string> {

@@ -15,9 +15,70 @@ import {
   isUnauthenticatedRateLimitError,
   writeFreeModeStateFile,
   writeWorkspaceRootsState,
+  readWorkspaceRootsState,
+  writeWorkspaceStateSnapshot,
 } from './codexAppServerBridge'
 
 const originalCodexHome = process.env.CODEX_HOME
+
+describe('modern project workspace state', () => {
+  it('reports an interrupted desktop write instead of returning an empty project list', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-projects-test-'))
+    try {
+      process.env.CODEX_HOME = home
+      await writeFile(join(home, '.codex-global-state.json'), '{"local-projects":')
+      await expect(readWorkspaceRootsState()).rejects.toThrow()
+    } finally { await rm(home, { recursive: true, force: true }) }
+  })
+  it('refuses a stale write and keeps the desktop update intact', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-projects-test-'))
+    try {
+      const path = join(home, '.codex-global-state.json')
+      await writeFile(path, '{"latest":true}')
+      await expect(writeWorkspaceStateSnapshot(path, '{"old":true}', { replacement: true })).rejects.toThrow('changed')
+      expect(await readFile(path, 'utf8')).toBe('{"latest":true}')
+    } finally { await rm(home, { recursive: true, force: true }) }
+  })
+  it('projects desktop IDs and assignments into the web response, ignoring obsolete legacy roots', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-projects-test-'))
+    try {
+      process.env.CODEX_HOME = home
+      const projectRoot = join(home, 'new-root')
+      await mkdir(projectRoot)
+      await writeFile(join(home, '.codex-global-state.json'), JSON.stringify({
+        'local-projects': { alpha: { id: 'alpha', name: '中文项目', rootPaths: [projectRoot] }, beta: { id: 'beta', name: '空项目', rootPaths: [] } },
+        'electron-saved-workspace-roots': [join(home, 'obsolete')], 'project-order': ['beta', 'alpha', join(home, 'obsolete')],
+        'thread-project-assignments': { one: { projectKind: 'local', projectId: 'alpha' } },
+        'projectless-thread-ids': ['free'],
+      }))
+      const state = await readWorkspaceRootsState()
+      expect(state.order).toEqual([projectRoot])
+      expect(state.labels[projectRoot]).toBe('中文项目')
+      expect(state.projectOrder).toEqual(['beta', 'alpha'])
+      expect(state.localProjects).toHaveLength(2)
+      expect(state.threadProjectAssignments).toEqual({ one: 'alpha' })
+      expect(state.projectlessThreadIds).toEqual(['free'])
+      expect((await readFile(join(home, '.codex-global-state.json'), 'utf8'))).toContain('obsolete')
+    } finally { await rm(home, { recursive: true, force: true }) }
+  })
+  it('adds web-imported roots to the modern desktop store without removing other metadata', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codex-projects-test-'))
+    try {
+      process.env.CODEX_HOME = home
+      const alpha = join(home, 'alpha'), beta = join(home, 'beta')
+      await mkdir(alpha); await mkdir(beta)
+      const path = join(home, '.codex-global-state.json')
+      await writeFile(path, JSON.stringify({ 'local-projects': { alpha: { id: 'alpha', name: 'Alpha', rootPaths: [alpha] } }, unrelated: { keep: true } }))
+      await writeWorkspaceRootsState({ order: [alpha, beta], labels: { [beta]: '新项目' }, active: [beta], projectOrder: ['alpha'], remoteProjects: [] })
+      const payload = JSON.parse(await readFile(path, 'utf8'))
+      expect(Object.values(payload['local-projects'])).toHaveLength(2)
+      expect(Object.values(payload['local-projects'])).toContainEqual(expect.objectContaining({ name: '新项目', rootPaths: [beta] }))
+      expect(payload.unrelated).toEqual({ keep: true })
+      await writeWorkspaceRootsState(await readWorkspaceRootsState())
+      expect(Object.values(JSON.parse(await readFile(path, 'utf8'))['local-projects'])).toHaveLength(2)
+    } finally { await rm(home, { recursive: true, force: true }) }
+  })
+})
 
 afterEach(() => {
   if (originalCodexHome === undefined) {

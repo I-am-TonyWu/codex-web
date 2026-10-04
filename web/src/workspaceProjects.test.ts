@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyLocalProjectMutation, normalizeProjectMetadata, readDesktopProjectMetadata } from './workspaceProjects'
+import { applyLocalProjectMutation, applyThreadProjectMutation, normalizeProjectMetadata, readDesktopProjectMetadata } from './workspaceProjects'
 
 const desktop = () => ({
   'local-projects': {
@@ -54,5 +54,35 @@ describe('desktop project metadata', () => {
     const next = applyLocalProjectMutation(before, { type: 'reorder', projectIds: ['alpha'] })
     expect(next['project-order']).toEqual(['alpha', 'beta', 'old-path', 'g-p-cloud'])
     expect(() => applyLocalProjectMutation(before, { type: 'remove', projectId: 'gone' })).toThrow()
+  })
+  it('moves an ordinary chat, preserving history paths and unrelated state', () => {
+    const before = { ...desktop(), 'thread-workspace-root-hints': { free: 'C:\\Old\\Folder' },
+      'sidebar-project-thread-orders': { alpha: { threadIds: ['one', 'free'], custom: true }, beta: { threadIds: ['other'] } } }
+    const next = applyThreadProjectMutation(before, { threadId: 'free', projectId: 'beta' })
+    expect(next['thread-project-assignments']).toMatchObject({ free: { projectKind: 'local', projectId: 'beta' } })
+    expect(next['projectless-thread-ids']).toEqual([])
+    expect(next['sidebar-project-thread-orders']).toEqual({ alpha: { threadIds: ['one'], custom: true }, beta: { threadIds: ['free', 'other'] } })
+    expect(next['thread-workspace-root-hints']).toEqual(before['thread-workspace-root-hints'])
+    expect(before['projectless-thread-ids']).toEqual(['free'])
+    expect(next.unrelated).toEqual(before.unrelated)
+  })
+  it('moves a task back to ordinary chats without cwd-based reassignment', () => {
+    const next = applyThreadProjectMutation(desktop(), { threadId: 'one', projectId: null })
+    expect(next['thread-project-assignments']).not.toHaveProperty('one')
+    expect(next['projectless-thread-ids']).toEqual(['free', 'one'])
+    expect(next['sidebar-project-thread-orders']).toEqual({ alpha: { threadIds: [] } })
+    expect(next['thread-project-membership-host-ids']).toEqual({ one: 'local' })
+  })
+  it('makes repeated assignment idempotent without duplicate ordered tasks', () => {
+    const once = applyThreadProjectMutation(desktop(), { threadId: 'one', projectId: 'beta' })
+    expect(applyThreadProjectMutation(once, { threadId: 'one', projectId: 'beta' })).toEqual(once)
+    const free = applyThreadProjectMutation(once, { threadId: 'one', projectId: null })
+    expect(applyThreadProjectMutation(free, { threadId: 'one', projectId: null })).toEqual(free)
+  })
+  it('rejects deleted or cloud projects and malformed IDs', () => {
+    for (const projectId of ['gone', 'g-p-cloud']) expect(() => applyThreadProjectMutation(desktop(), { threadId: 'one', projectId })).toThrow()
+    expect(() => applyThreadProjectMutation({}, { threadId: 'one', projectId: null })).toThrow()
+    for (const threadId of ['', '__proto__', 'constructor', ' padded ']) expect(() => applyThreadProjectMutation(desktop(), { threadId, projectId: null })).toThrow()
+    expect(() => applyThreadProjectMutation(desktop(), { threadId: 'two', projectId: 'alpha' })).toThrow('ChatGPT')
   })
 })

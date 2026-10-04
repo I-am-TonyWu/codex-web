@@ -6,7 +6,11 @@ A browser interface for the Codex environment running on your Windows computer, 
 
 Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91**. The first public release is **1.4.3.1**. This is an independent community project, not affiliated with OpenAI, GitHub, or Cloudflare. It does not mirror the ChatGPT website or forward subscription-based ChatGPT chats.
 
+Current version: **1.4.3.4**. See the [release notes](docs/releases/1.4.3.4.md) for changes since the previous public release, 1.4.3.1.
+
 ## Download and requirements
+
+Read the [changes since the last public release](docs/releases/1.4.3.4.md) and the [host migration guide](migration/README.md).
 
 - [Download the Windows x64 release](https://github.com/I-am-TonyWu/codex-web/releases/latest). Choose `CodexWebTray.exe`, not GitHub's automatically generated source archive.
 - Windows 10/11 x64 with .NET Framework 4.8 and a working, signed-in Codex Windows desktop installation.
@@ -38,7 +42,10 @@ The tray menu contains status, Open web, Settings, and Exit. Start/stop/restart,
 
 ## Web features
 
+- Right-click a chat or use its ellipsis menu → **Project** to assign it, switch projects, or return to **No project (ordinary chat)**. Search and current-membership checks are included; saves block duplicate clicks, and failures preserve the previous assignment. Chat contents, working directories, and project files stay unchanged.
+
 - Create and read Codex work tasks, with desktop task synchronization support.
+- Synchronize modern local project IDs, names, ordering, empty projects, and explicit conversation assignments. Visible pages refresh about every five seconds and on foreground return; historical execution directories remain distinct from project roots. ChatGPT cloud-chat projects are outside the local work backend.
 - Filter reasoning-effort options using model capabilities.
 - Improvements to long conversation loading and scrolling.
 - Render Mermaid diagrams with light/dark themes, source toggling, and a full-size preview. Diagram assets are bundled locally, with no external CDN required.

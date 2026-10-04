@@ -543,6 +543,16 @@
   @apply text-zinc-400;
 }
 
+.thread-project-panel { max-width: 420px; width: calc(100vw - 32px); }
+.thread-project-options { display: flex; flex-direction: column; gap: 4px; max-height: min(360px, 45vh); overflow-y: auto; margin-top: 12px; }
+.thread-project-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border-radius: 8px; text-align: left; color: #27272a; }
+.thread-project-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.thread-project-option:hover, .thread-project-option[aria-pressed='true'] { background: #f4f4f5; }
+.thread-project-option:disabled { opacity: .55; cursor: wait; }
+.thread-project-error { margin-top: 12px; color: #be123c; overflow-wrap: anywhere; }
+:root.dark .thread-project-option { color: #e4e4e7; }
+:root.dark .thread-project-option:hover, :root.dark .thread-project-option[aria-pressed='true'] { background: #3f3f46; }
+:root.dark .thread-project-error { color: #fda4af; }
 :root.dark .rename-thread-panel {
   @apply bg-zinc-800;
 }

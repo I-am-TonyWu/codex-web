@@ -102,6 +102,7 @@
             @remove-project="onRemoveProject" @reorder-project="onReorderProject"
             @copy-thread-chat="onCopyThreadChat"
             @automations-changed="onAutomationsChanged"
+            @thread-project-changed="refreshWorkspaceProjects"
             @import-project="onChooseProjectImportZip"
             @start-new-chat="onStartProjectlessNewChat" />
         </div>

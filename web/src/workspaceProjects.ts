@@ -11,6 +11,38 @@ export type LocalProjectMutation =
   | { type: 'remove'; projectId: string }
   | { type: 'reorder'; projectIds: string[] }
 
+export type ThreadProjectMutation = { threadId: string; projectId: string | null }
+
+export function applyThreadProjectMutation(payload: Record<string, unknown>, mutation: ThreadProjectMutation): Record<string, unknown> {
+  const { threadId, projectId } = mutation
+  if (!threadId || threadId.length > 200 || threadId.trim() !== threadId || ['__proto__', 'constructor', 'prototype'].includes(threadId)) {
+    throw new Error('Invalid thread ID')
+  }
+  const metadata = readDesktopProjectMetadata(payload)
+  if (!metadata.localProjects) throw new Error('Update the desktop client to use project assignments')
+  if (projectId !== null && !metadata.localProjects.some((project) => project.id === projectId)) {
+    throw new Error('The local project no longer exists; refresh the project list')
+  }
+  const assignments = { ...record(payload['thread-project-assignments']) }
+  if (record(assignments[threadId]).projectKind === 'chatgpt') throw new Error('ChatGPT conversations cannot be moved to local projects')
+  const projectless = uniqueStrings(payload['projectless-thread-ids']).filter((id) => id !== threadId)
+  const orders = Object.fromEntries(Object.entries(record(payload['sidebar-project-thread-orders'])).map(([id, value]) => {
+    const order = record(value)
+    return [id, { ...order, threadIds: uniqueStrings(order.threadIds).filter((item) => item !== threadId) }]
+  }))
+  if (projectId === null) {
+    delete assignments[threadId]
+    projectless.push(threadId)
+  } else {
+    assignments[threadId] = { projectKind: 'local', projectId }
+    const order = record(orders[projectId])
+    orders[projectId] = { ...order, threadIds: [threadId, ...uniqueStrings(order.threadIds)] }
+  }
+  return { ...payload, 'thread-project-assignments': assignments, 'projectless-thread-ids': projectless,
+    'sidebar-project-thread-orders': orders,
+    'thread-project-membership-host-ids': { ...record(payload['thread-project-membership-host-ids']), [threadId]: 'local' } }
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }

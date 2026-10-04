@@ -3035,6 +3035,15 @@ export async function mutateLocalProject(mutation: LocalProjectMutation): Promis
   invalidateWorkspaceRootsStateCache()
 }
 
+export async function setThreadProject(threadId: string, projectId: string | null): Promise<void> {
+  const response = await fetch('/codex-api/thread-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId, projectId }) })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to assign thread project; refresh and retry'))
+  }
+  invalidateWorkspaceRootsStateCache()
+}
+
 export async function openProjectRoot(path: string, options?: { createIfMissing?: boolean; label?: string }): Promise<string> {
   const response = await fetch('/codex-api/project-root', {
     method: 'POST',

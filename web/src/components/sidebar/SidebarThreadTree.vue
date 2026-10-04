@@ -619,6 +619,9 @@
         :data-open-direction="getThreadMenuDirection(openThreadMenuThread.id)"
         @click.stop
       >
+        <button v-if="localProjectIds" class="thread-menu-item" type="button" @click="openThreadProjectDialog(openThreadMenuThread.id)">
+          {{ t('Project') }} <span aria-hidden="true">›</span>
+        </button>
         <button class="thread-menu-item" type="button" @click="openAutomationDialog(openThreadMenuThread.id)">
           {{ threadHasAutomation(openThreadMenuThread.id) ? 'Manage automations…' : 'Add automation…' }}
         </button>
@@ -652,6 +655,28 @@
         <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
           {{ t('Delete thread') }}
         </button>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="threadProjectDialogId" class="rename-thread-overlay" @click.self="closeThreadProjectDialog" @keydown.esc.prevent="closeThreadProjectDialog">
+        <div class="rename-thread-panel thread-project-panel" role="dialog" aria-modal="true" :aria-label="t('Project')" :aria-busy="threadProjectSaving">
+          <h3 class="rename-thread-title">{{ t('Project') }}</h3>
+          <p class="rename-thread-subtitle">{{ t('Choose a project. Chat content and the working directory stay unchanged.') }}</p>
+          <input ref="threadProjectSearchRef" v-model="threadProjectSearch" class="rename-thread-input" type="search" :placeholder="t('Search projects...')" :aria-label="t('Search projects...')" :disabled="threadProjectSaving" />
+          <div class="thread-project-options">
+            <button class="thread-project-option" type="button" :disabled="threadProjectSaving" :aria-pressed="currentThreadProject === null" @click="assignThreadProject(null)">
+              <span>{{ t('No project (ordinary chat)') }}</span><span v-if="currentThreadProject === null" aria-hidden="true">✓</span>
+            </button>
+            <button v-for="project in filteredThreadProjects" :key="project.id" class="thread-project-option" type="button" :disabled="threadProjectSaving" :aria-pressed="currentThreadProject === project.id" @click="assignThreadProject(project.id)">
+              <IconTablerFolder class="thread-icon" /><span class="thread-project-name">{{ project.name }}</span><span v-if="currentThreadProject === project.id" aria-hidden="true">✓</span>
+            </button>
+            <p v-if="!filteredThreadProjects.length && threadProjectSearch" class="rename-thread-subtitle">{{ t('No matching projects') }}</p>
+          </div>
+          <p v-if="threadProjectSaving" role="status" class="rename-thread-subtitle">{{ t('Moving…') }}</p>
+          <p v-if="threadProjectError" role="alert" class="thread-project-error">{{ t('Project assignment failed') }}: {{ threadProjectError }}</p>
+          <div class="rename-thread-actions"><button class="rename-thread-button" type="button" :disabled="threadProjectSaving" @click="closeThreadProjectDialog">{{ t('Cancel') }}</button></div>
+        </div>
       </div>
     </Teleport>
 
@@ -891,6 +916,7 @@ import {
   getThreadAutomationMap,
   getThreadSummary,
   persistPinnedThreadIds,
+  setThreadProject,
   runThreadAutomationNow,
   upsertProjectAutomation,
   upsertThreadAutomation,
@@ -947,7 +973,43 @@ const emit = defineEmits<{
   'start-new-chat': []
   'import-project': []
   'automations-changed': []
+  'thread-project-changed': []
 }>()
+
+const threadProjectDialogId = ref('')
+const threadProjectSearch = ref('')
+const threadProjectSearchRef = ref<HTMLInputElement | null>(null)
+const threadProjectSaving = ref(false)
+const threadProjectError = ref('')
+const currentThreadProject = computed(() => props.groups.find(group => group.threads.some(thread => thread.id === threadProjectDialogId.value) && props.localProjectIds?.includes(group.projectName))?.projectName ?? null)
+const filteredThreadProjects = computed(() => (props.localProjectIds ?? []).map(id => ({ id, name: props.projectDisplayNameById[id] || id }))
+  .filter(project => project.name.toLocaleLowerCase().includes(threadProjectSearch.value.trim().toLocaleLowerCase())))
+
+function openThreadProjectDialog(threadId: string): void {
+  threadProjectDialogId.value = threadId
+  threadProjectSearch.value = ''
+  threadProjectError.value = ''
+  closeThreadMenu()
+  void nextTick(() => threadProjectSearchRef.value?.focus())
+}
+function closeThreadProjectDialog(): void {
+  if (threadProjectSaving.value) return
+  threadProjectDialogId.value = ''
+}
+async function assignThreadProject(projectId: string | null): Promise<void> {
+  if (!threadProjectDialogId.value || threadProjectSaving.value) return
+  if (projectId === currentThreadProject.value) { closeThreadProjectDialog(); return }
+  threadProjectSaving.value = true
+  threadProjectError.value = ''
+  try {
+    await setThreadProject(threadProjectDialogId.value, projectId)
+    emit('thread-project-changed')
+    threadProjectDialogId.value = ''
+  } catch (error) {
+    threadProjectError.value = error instanceof Error ? error.message : t('Project assignment failed')
+    recordVisibleFailure(threadProjectError.value)
+  } finally { threadProjectSaving.value = false }
+}
 
 type PendingProjectDrag = {
   projectName: string

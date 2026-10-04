@@ -51,7 +51,7 @@ import {
 } from '../commandResolution.js'
 import type { CollaborationModeKind, ReasoningEffort } from '../types/codex.js'
 import { isAbsoluteLikePath, normalizePathForComparison } from '../pathUtils.js'
-import { applyLocalProjectMutation, readDesktopProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
+import { applyLocalProjectMutation, applyThreadProjectMutation, readDesktopProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -8604,6 +8604,25 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             : existingState.projectOrder,
           remoteProjects: existingState.remoteProjects,
         }))
+        setJson(res, 200, { ok: true })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread-project') {
+        const mutation = asRecord(await readJsonBody(req))
+        if (!mutation || typeof mutation.threadId !== 'string' || !(mutation.projectId === null || typeof mutation.projectId === 'string')) {
+          setJson(res, 400, { error: 'Invalid thread project assignment' }); return
+        }
+        try {
+          await queueWorkspaceRootsMutation(async () => {
+            const path = getCodexGlobalStatePath()
+            const snapshot = await readFile(path, 'utf8')
+            const next = applyThreadProjectMutation(asRecord(JSON.parse(snapshot)) ?? {}, { threadId: mutation.threadId as string, projectId: mutation.projectId as string | null })
+            await writeWorkspaceStateSnapshot(path, snapshot, next)
+          })
+        } catch (error) {
+          setJson(res, 409, { error: error instanceof Error ? error.message : 'Failed to assign thread project' }); return
+        }
         setJson(res, 200, { ok: true })
         return
       }

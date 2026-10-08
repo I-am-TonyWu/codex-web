@@ -2440,11 +2440,12 @@ export async function callRpcWithArchiveRecovery(
     const paramsRecord = asRecord(params)
     const threadId = readNonEmptyString(paramsRecord?.threadId)
 
-    // Recover before an HTTP proxy can replace the 502 JSON with an HTML page.
     // Reading history does not acquire the desktop process's writer lock.
+    // Tell clients this is a read-only fallback, not a successful resume.
     if (method === 'thread/resume' && threadId
       && /thread .+ already has an active writer/iu.test(getErrorMessage(error, ''))) {
-      return appServer.rpc('thread/read', { threadId, includeTurns: true })
+      const history = await appServer.rpc('thread/read', { threadId, includeTurns: true })
+      return { ...asRecord(history), webReadOnlyReason: 'thread_writer_conflict' }
     }
 
     if (method === 'turn/start' && threadId && isThreadNotFoundError(error)) {
@@ -9188,7 +9189,16 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       next()
     } catch (error) {
       const message = getErrorMessage(error, 'Unknown bridge error')
-      setJson(res, 502, { error: message })
+      if (rpcMethod) {
+        // RPC rejection is a valid application response. HTTP 502 lets an edge
+        // proxy replace our actionable error with its generic HTML gateway page.
+        const code = /already has an active writer/iu.test(message) ? 'thread_writer_conflict' : 'rpc_error'
+        console.warn(`[codex-rpc] ${rpcMethod} rejected (${code})`)
+        res.setHeader('Cache-Control', 'no-store')
+        setJson(res, 200, { error: { code, message } })
+      } else {
+        setJson(res, 502, { error: message })
+      }
     }
   }
 

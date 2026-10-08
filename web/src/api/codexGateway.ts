@@ -24,7 +24,7 @@ import type {
   ThreadStartResponse,
   Turn,
 } from './appServerDtos'
-import { extractErrorMessage, normalizeCodexApiError } from './codexErrors'
+import { extractErrorMessage, normalizeCodexApiError, isThreadWriterConflict } from './codexErrors'
 import {
   readActiveTurnIdFromResponse,
   normalizeThreadGroupsV2,
@@ -1489,6 +1489,7 @@ export async function removeAccount(storageId: string): Promise<AccountsListResu
 }
 
 export type ResumedThread = {
+  readOnly?: boolean
   model: string
   modelProvider: string
   messages: UiMessage[]
@@ -1507,8 +1508,7 @@ function isMissingLegacyCustomEndpointProvider(error: unknown): boolean {
 }
 
 function isThreadOwnedByAnotherWriter(error: unknown): boolean {
-  return error instanceof Error
-    && /thread .+ already has an active writer/iu.test(error.message)
+  return isThreadWriterConflict(error)
 }
 
 export async function resumeThread(threadId: string): Promise<ResumedThread> {
@@ -1517,10 +1517,12 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
 
   const promise = (async () => {
     let payload: ThreadResumeResponse | ThreadReadResponse
+    let readOnly = false
     try {
       payload = await callRpc<ThreadResumeResponse>('thread/resume', { threadId })
     } catch (error) {
       if (isThreadOwnedByAnotherWriter(error)) {
+        readOnly = true
         payload = await callRpc<ThreadReadResponse>('thread/read', { threadId, includeTurns: true })
       } else {
         if (!isMissingLegacyCustomEndpointProvider(error)) throw error
@@ -1534,6 +1536,7 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
           })
         } catch (retryError) {
           if (!isThreadOwnedByAnotherWriter(retryError)) throw retryError
+          readOnly = true
           payload = await callRpc<ThreadReadResponse>('thread/read', { threadId, includeTurns: true })
         }
       }
@@ -1541,6 +1544,7 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
     const startTurnIndex = readThreadTurnStartIndex(payload)
     const messages = normalizeThreadMessagesV2(payload, startTurnIndex)
     return {
+      readOnly: readOnly || asRecord(payload)?.webReadOnlyReason === 'thread_writer_conflict',
       model: normalizeThreadModelFromPayload(payload),
       modelProvider: normalizeThreadModelProviderFromPayload(payload),
       messages,

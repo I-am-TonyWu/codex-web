@@ -10,6 +10,15 @@ export type CodexErrorCode =
   | 'network_error'
   | 'invalid_response'
   | 'unknown_error'
+  | 'thread_writer_conflict'
+
+export const THREAD_WRITER_CONFLICT_MESSAGE = '此对话正由本机 Codex 客户端或另一个进程占用，网页暂时只能读取历史。可等待客户端释放此对话后重试，或点击“在网页接续”保留历史并创建独立分支。此条消息未发送。'
+
+export function isThreadWriterConflict(value: unknown): boolean {
+  if (value instanceof CodexApiError && value.code === 'thread_writer_conflict') return true
+  const message = value instanceof Error ? value.message : typeof value === 'string' ? value : ''
+  return /already has an active writer|thread_writer_conflict|此对话正由本机 Codex/iu.test(message)
+}
 
 export class CodexApiError extends Error {
   code: CodexErrorCode

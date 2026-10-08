@@ -986,11 +986,13 @@
                   <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                     :active-thread-id="composerThreadContextId" :cwd="composerCwd"
                     :live-overlay="liveOverlay"
+                    :is-continuing-on-web="isContinuingOnWeb"
                     :pending-requests="selectedThreadServerRequests"
                     :has-more-persisted-above="hasMoreOlderMessages"
                     :is-loading-persisted-above="isLoadingOlderMessages"
                     :load-earlier-messages="loadOlderMessages"
                     @fork-thread="onForkThreadFromMessage"
+                    @continue-on-web="onContinueOnWeb"
                     @rollback="onRollback"
                     @implement-plan="onImplementPlan"
                     @respond-server-request="onRespondServerRequest" />
@@ -1488,6 +1490,7 @@ const {
   toggleSelectedThreadTerminal,
   archiveThreadById,
   forkThreadById,
+  getPendingThreadDraft,
   renameThreadById,
   forkThreadFromTurn,
   sendMessageToSelectedThread,
@@ -1549,6 +1552,7 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
+const isContinuingOnWeb = ref(false)
 const threadConversationRef = ref<{ jumpToLatest: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const threadTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
@@ -2874,6 +2878,39 @@ async function onForkThread(threadId: string): Promise<void> {
   if (isMobile.value) setSidebarCollapsed(true)
 }
 
+async function onContinueOnWeb(threadId: string): Promise<void> {
+  if (isContinuingOnWeb.value || threadId !== selectedThreadId.value) return
+  isContinuingOnWeb.value = true
+  const draft = getPendingThreadDraft(threadId)
+  try {
+    const nextThreadId = await forkThreadById(threadId, { webContinuation: true })
+    if (!nextThreadId) return
+    await router.push({ name: 'thread', params: { threadId: nextThreadId } })
+    if (draft) {
+      // Route synchronization can briefly reselect the original thread while
+      // the fork is loading. Hydrate only after the new composer is stable.
+      await new Promise<void>((resolve) => {
+        let finished = false
+        let stopWatching = () => {}
+        stopWatching = watch([routeThreadId, selectedThreadId, isRouteSyncInProgress, isLoadingMessages, threadComposerRef], async () => {
+          await nextTick()
+          if (finished) return
+          if (routeThreadId.value !== nextThreadId) {
+            finished = true
+          } else if (selectedThreadId.value === nextThreadId && !isRouteSyncInProgress.value && !isLoadingMessages.value && threadComposerRef.value) {
+            if (!threadComposerRef.value.hasUnsavedDraft()) threadComposerRef.value.hydrateDraft(draft)
+            finished = true
+          }
+          if (finished) { stopWatching(); resolve() }
+        }, { immediate: true, flush: 'post' })
+      })
+    }
+    if (isMobile.value) setSidebarCollapsed(true)
+  } finally {
+    isContinuingOnWeb.value = false
+  }
+}
+
 function isWorktreePath(cwdRaw: string): boolean {
   const cwd = cwdRaw.trim().replace(/\\/gu, '/')
   if (!cwd) return false
@@ -3554,7 +3591,8 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
     void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.fileAttachments)
     return
   }
-  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex)
+  // Shared state already presents send errors inside the conversation.
+  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex).catch(() => undefined)
 }
 
 function onEditQueuedMessage(messageId: string): void {

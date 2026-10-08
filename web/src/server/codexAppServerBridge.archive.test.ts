@@ -92,7 +92,7 @@ describe('callRpcWithArchiveRecovery', () => {
   it('reads history on a resume writer conflict before returning an HTTP error', async () => {
     const result = { thread: { id: 'shared-thread', turns: [] } }
     const rpc = vi.fn().mockRejectedValueOnce(new Error('thread shared-thread already has an active writer')).mockResolvedValueOnce(result)
-    await expect(callRpcWithArchiveRecovery({ rpc }, 'thread/resume', { threadId: 'shared-thread' })).resolves.toBe(result)
+    await expect(callRpcWithArchiveRecovery({ rpc }, 'thread/resume', { threadId: 'shared-thread' })).resolves.toEqual({ ...result, webReadOnlyReason: 'thread_writer_conflict' })
     expect(rpc.mock.calls).toEqual([
       ['thread/resume', { threadId: 'shared-thread' }],
       ['thread/read', { threadId: 'shared-thread', includeTurns: true }],

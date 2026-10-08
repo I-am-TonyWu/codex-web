@@ -16,8 +16,8 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Codex 网页托盘")]
 [assembly: AssemblyDescription("本地 Codex 网页服务与桌面程序状态监控")]
-[assembly: AssemblyVersion("1.4.3.4")]
-[assembly: AssemblyFileVersion("1.4.3.4")]
+[assembly: AssemblyVersion("1.4.3.5")]
+[assembly: AssemblyFileVersion("1.4.3.5")]
 
 namespace CodexWebTray {
     internal static class Startup {

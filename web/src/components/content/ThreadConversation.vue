@@ -593,6 +593,11 @@
                     </button>
                   </template>
                 </div>
+                <button v-if="isTurnErrorMessage(message) && isThreadWriterConflict(message.text)"
+                  type="button" class="writer-continuation-button" :disabled="isContinuingOnWeb"
+                  @click="emit('continueOnWeb', activeThreadId)">
+                  {{ isContinuingOnWeb ? '正在创建接续对话…' : '在网页接续（保留原对话）' }}
+                </button>
                 <a
                   v-if="isTurnErrorMessage(message)"
                   class="turn-error-feedback"
@@ -747,6 +752,11 @@
               </p>
               <div v-if="liveOverlay.errorText" class="live-overlay-error">
                 <span>{{ liveOverlay.errorText }}</span>
+                <button v-if="isThreadWriterConflict(liveOverlay.errorText)" type="button"
+                  class="writer-continuation-button" :disabled="isContinuingOnWeb"
+                  @click="emit('continueOnWeb', activeThreadId)">
+                  {{ isContinuingOnWeb ? '正在创建接续对话…' : '在网页接续（保留原对话）' }}
+                </button>
                 <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
               </div>
             </article>
@@ -922,6 +932,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { updateThreadFileChanges } from '../../api/codexGateway'
+import { isThreadWriterConflict } from '../../api/codexErrors'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard, copyTextWithSelectionFallback } from '../../utils/clipboard'
@@ -1318,6 +1329,7 @@ const props = defineProps<{
   isLoading: boolean
   activeThreadId: string
   cwd: string
+  isContinuingOnWeb?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
@@ -1325,6 +1337,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnIndex: number }]
+  continueOnWeb: [threadId: string]
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
@@ -4656,7 +4669,17 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-error {
-  @apply m-0 flex items-start justify-between gap-3 text-sm leading-5 text-rose-600 whitespace-pre-wrap;
+  @apply m-0 flex flex-wrap items-start gap-3 text-sm leading-5 text-rose-600 whitespace-pre-wrap;
+}
+
+.writer-continuation-button {
+  @apply mt-2 inline-flex max-w-full items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:cursor-wait disabled:opacity-60 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200 dark:hover:bg-blue-900;
+}
+
+:global(.dark) .writer-continuation-button {
+  border-color: #1e40af;
+  background: #172554;
+  color: #bfdbfe;
 }
 
 .live-overlay-feedback {

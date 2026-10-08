@@ -28,6 +28,7 @@ import {
   mutateLocalProject,
   setCodexSpeedMode,
   setThreadQueueState,
+  setThreadProject,
   setWorkspaceRootsState,
   getThreadTitleCache,
   persistThreadTitle,
@@ -42,7 +43,7 @@ import {
   type ThreadQueueState,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
-import { CodexApiError } from '../api/codexErrors'
+import { CodexApiError, isThreadWriterConflict, THREAD_WRITER_CONFLICT_MESSAGE } from '../api/codexErrors'
 import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
 import type {
   CollaborationModeKind,
@@ -1510,6 +1511,7 @@ export function useDesktopState() {
   const persistedUserMessageByThreadId = ref<Record<string, boolean>>({})
   const pendingServerRequestsByThreadId = ref<Record<string, UiServerRequest[]>>({})
   const pendingTurnRequestByThreadId = ref<Record<string, PendingTurnRequest>>({})
+  const rejectedTurnDraftByThreadId = ref<Record<string, PendingTurnRequest>>({})
   const codexRateLimit = ref<UiRateLimitSnapshot | null>(null)
   const threadTokenUsageByThreadId = ref<Record<string, UiThreadTokenUsage>>(loadThreadTokenUsageMap())
   const terminalOpenByThreadId = ref<Record<string, boolean>>(loadThreadTerminalOpenMap())
@@ -1944,6 +1946,7 @@ export function useDesktopState() {
 
       if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
+        if (resumedThread.readOnly) throw new CodexApiError(THREAD_WRITER_CONFLICT_MESSAGE, { code: 'thread_writer_conflict', method: 'thread/resume' })
         if (resumedThread.model && !normalizeStoredModelId(selectedModelIdByContext.value[threadId])) {
           setThreadModelId(threadId, resolveThreadModelForProvider(threadId, resumedThread.model, resumedThread.modelProvider))
         }
@@ -2318,6 +2321,7 @@ export function useDesktopState() {
     loadedMessagesByThreadId.value = pruneThreadStateMap(loadedMessagesByThreadId.value, activeThreadIds)
     loadedVersionByThreadId.value = pruneThreadStateMap(loadedVersionByThreadId.value, activeThreadIds)
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
+    rejectedTurnDraftByThreadId.value = pruneThreadStateMap(rejectedTurnDraftByThreadId.value, activeThreadIds)
     turnIndexByTurnIdByThreadId.value = pruneThreadStateMap(turnIndexByTurnIdByThreadId.value, activeThreadIds)
     persistedMessagesByThreadId.value = pruneThreadStateMap(persistedMessagesByThreadId.value, activeThreadIds)
     liveAgentMessagesByThreadId.value = pruneThreadStateMap(liveAgentMessagesByThreadId.value, activeThreadIds)
@@ -4491,7 +4495,7 @@ export function useDesktopState() {
       if (resumedThread) {
         resumedThreadById.value = {
           ...resumedThreadById.value,
-          [threadId]: true,
+          [threadId]: resumedThread.readOnly !== true,
         }
       }
 
@@ -4781,13 +4785,13 @@ export function useDesktopState() {
     }
   }
 
-  async function forkThreadById(threadId: string): Promise<string> {
+  async function forkThreadById(threadId: string, options: { webContinuation?: boolean } = {}): Promise<string> {
     const sourceThreadId = threadId.trim()
     if (!sourceThreadId) return ''
 
     const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === sourceThreadId)
     const sourceCwd = sourceThread?.cwd?.trim() ?? ''
-    const sourceTitle = sourceThread?.title?.trim() ?? 'Forked chat'
+    const sourceTitle = threadTitleById.value[sourceThreadId]?.trim() || sourceThread?.title?.trim() || 'Forked chat'
     const selectedModel = readModelIdForThread(sourceThreadId)
     error.value = ''
 
@@ -4797,6 +4801,19 @@ export function useDesktopState() {
       if (!nextThreadId) return ''
 
       insertOptimisticThread(nextThreadId, sourceCwd, sourceTitle)
+      if (options.webContinuation) {
+        // The new thread is independent; never silently replace the original.
+        const continuationTitle = `${sourceTitle} · 网页接续`
+        await renameThreadById(nextThreadId, continuationTitle)
+        const projectId = workspaceRootsState.value?.threadProjectAssignments?.[sourceThreadId]
+        const projectless = workspaceRootsState.value?.projectlessThreadIds?.includes(sourceThreadId)
+        try {
+          if (projectId || projectless) await setThreadProject(nextThreadId, projectless ? null : projectId!)
+        } catch {
+          // Keep the successful fork reachable even if optional metadata failed.
+          error.value = '接续对话已创建，但项目归属保存失败。可在侧边栏重新设置项目。'
+        }
+      }
       setThreadModelId(nextThreadId, forkedThread.model)
       resumedThreadById.value = {
         ...resumedThreadById.value,
@@ -5015,6 +5032,10 @@ export function useDesktopState() {
       )
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
+      const rejected = pendingTurnRequestByThreadId.value[threadId]
+      if (rejected && isThreadWriterConflict(unknownError)) {
+        rejectedTurnDraftByThreadId.value = { ...rejectedTurnDraftByThreadId.value, [threadId]: rejected }
+      }
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
@@ -5155,10 +5176,12 @@ export function useDesktopState() {
       collaborationMode,
       fallbackRetried: false,
     })
+    rejectedTurnDraftByThreadId.value = omitKey(rejectedTurnDraftByThreadId.value, threadId)
 
     try {
       if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
+        if (resumedThread.readOnly) throw new CodexApiError(THREAD_WRITER_CONFLICT_MESSAGE, { code: 'thread_writer_conflict', method: 'thread/resume' })
         if (resumedThread.model && !normalizeStoredModelId(selectedModelIdByContext.value[threadId])) {
           setThreadModelId(threadId, resolveThreadModelForProvider(threadId, resumedThread.model, resumedThread.modelProvider))
         }
@@ -5843,6 +5866,14 @@ export function useDesktopState() {
     archiveThreadById,
     renameThreadById,
     forkThreadById,
+    getPendingThreadDraft: (threadId: string) => {
+      const pending = rejectedTurnDraftByThreadId.value[threadId] ?? pendingTurnRequestByThreadId.value[threadId]
+      return pending ? {
+        text: pending.text, imageUrls: [...pending.imageUrls],
+        skills: pending.skills.map((skill) => ({ ...skill })),
+        fileAttachments: pending.fileAttachments.map((file) => ({ ...file })),
+      } : null
+    },
     forkThreadFromTurn,
     rollbackSelectedThread,
 

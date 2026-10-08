@@ -36,6 +36,7 @@ const gatewayMocks = vi.hoisted(() => ({
   rollbackThread: vi.fn(),
   setCodexSpeedMode: vi.fn(),
   setThreadQueueState: vi.fn(),
+  setThreadProject: vi.fn(),
   setWorkspaceRootsState: vi.fn(),
   startThread: vi.fn(),
   startThreadTurn: vi.fn(),
@@ -89,6 +90,53 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('desktop writer conflict', () => {
+  it('keeps history readable without attempting a turn or a model fallback, preserving the rejected draft', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({ readOnly: true, model: 'gpt-6.1-sol', modelProvider: 'openai',
+      messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    const state = useDesktopState()
+    state.primeSelectedThread('desktop-owned')
+    await state.loadMessages('desktop-owned')
+    const files = [{ label: 'report.txt', path: '/upload/report.txt', fsPath: 'C:/upload/report.txt' }]
+    await expect(state.sendMessageToSelectedThread('continue this work', [], [], 'steer', files))
+      .rejects.toMatchObject({ code: 'thread_writer_conflict' })
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(2)
+    expect(state.error.value).toContain('此条消息未发送')
+    expect(state.getPendingThreadDraft('desktop-owned')).toMatchObject({ text: 'continue this work', fileAttachments: files })
+  })
+
+  it('forks only on request, keeps the project and directory, and names the continuation distinctly', async () => {
+    installTestWindow()
+    const original = thread('desktop-original', 'C:/Projects/shared')
+    gatewayMocks.getWorkspaceRootsState.mockResolvedValue({ order: ['C:/Projects/shared'], active: [], labels: {}, projectOrder: ['alpha'],
+      localProjects: [{ id: 'alpha', name: 'Project', rootPaths: ['C:/Projects/shared'] }],
+      threadProjectAssignments: { 'desktop-original': 'alpha' }, projectlessThreadIds: [] })
+    gatewayMocks.getThreadGroupsPage.mockImplementation(async () => ({
+      groups: [{ projectName: 'Project', threads: gatewayMocks.forkThread.mock.calls.length
+        ? [original, thread('web-continuation', original.cwd)] : [original] }], nextCursor: null,
+    }))
+    gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: { 'desktop-original': 'Web修订' } })
+    gatewayMocks.forkThread.mockResolvedValue({ threadId: 'web-continuation', model: 'gpt-6.1-sol' })
+    gatewayMocks.getThreadDetail.mockResolvedValue({ messages: [{ id: 'history', role: 'assistant', text: 'original history' }],
+      inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    const state = useDesktopState()
+    state.primeSelectedThread(original.id)
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    expect(gatewayMocks.forkThread).not.toHaveBeenCalled()
+    const continuationId = await state.forkThreadById(original.id, { webContinuation: true })
+    expect(state.error.value).toBe('')
+    expect(continuationId).toBe('web-continuation')
+    expect(gatewayMocks.forkThread).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.forkThread.mock.calls[0].slice(0, 2)).toEqual([original.id, original.cwd])
+    expect(gatewayMocks.renameThread).toHaveBeenCalledWith('web-continuation', 'Web修订 · 网页接续')
+    expect(gatewayMocks.setThreadProject).toHaveBeenCalledWith('web-continuation', 'alpha')
+    expect(state.selectedThreadId.value).toBe('web-continuation')
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+  })
 })
 
 describe('filterGroupsByWorkspaceRoots', () => {

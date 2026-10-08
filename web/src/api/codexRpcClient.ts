@@ -1,5 +1,5 @@
 import type { RpcEnvelope, RpcMethodCatalog } from '../types/codex'
-import { CodexApiError, extractErrorMessage } from './codexErrors'
+import { CodexApiError, extractErrorMessage, isThreadWriterConflict, THREAD_WRITER_CONFLICT_MESSAGE } from './codexErrors'
 
 type RpcRequestBody = {
   method: string
@@ -56,7 +56,10 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
   }
 
   if (!response.ok) {
-    const detail = extractErrorMessage(payload, '') || rawText?.slice(0, 500) || ''
+    const isHtml = /<!doctype html|<html[\s>]/iu.test(rawText ?? '')
+    const detail = extractErrorMessage(payload, '') || (isHtml
+      ? '远程连接暂时不可用。请刷新查看对话的最新消息，确认是否已发送，再决定是否重试。'
+      : rawText?.slice(0, 500)) || ''
     const prefix = `RPC ${method} failed with HTTP ${response.status}`
     throw new CodexApiError(
       detail ? `${prefix}: ${detail}` : prefix,
@@ -66,6 +69,15 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
         status: response.status,
       },
     )
+  }
+
+  const rpcError = asRecord(payload)?.error
+  if (rpcError !== undefined && rpcError !== null) {
+    const detail = extractErrorMessage(payload, `RPC ${method} failed`)
+    const writerConflict = asRecord(rpcError)?.code === 'thread_writer_conflict' || isThreadWriterConflict(detail)
+    throw new CodexApiError(writerConflict ? THREAD_WRITER_CONFLICT_MESSAGE : detail, {
+      code: writerConflict ? 'thread_writer_conflict' : 'rpc_error', method, status: response.status,
+    })
   }
 
   const envelope = payload as RpcEnvelope<T> | null

@@ -6,11 +6,11 @@ A browser interface for the Codex environment running on your Windows computer, 
 
 Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91**. The first public release is **1.4.3.1**. This is an independent community project, not affiliated with OpenAI, GitHub, or Cloudflare. It does not mirror the ChatGPT website or forward subscription-based ChatGPT chats.
 
-Current version: **1.4.3.4**. See the [release notes](docs/releases/1.4.3.4.md) for changes since the previous public release, 1.4.3.1.
+Current stable version: **1.4.3.6**. See the [release notes](docs/releases/1.4.3.6.md), [version history and switching guide](docs/RELEASES.md), and [all GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases).
 
 ## Download and requirements
 
-Read the [changes since the last public release](docs/releases/1.4.3.4.md) and the [host migration guide](migration/README.md).
+Read the [changes since the last public release](docs/releases/1.4.3.6.md), [host migration guide](migration/README.md), and [Windows sandbox guidance](docs/WINDOWS-SANDBOX.md).
 
 - [Download the Windows x64 release](https://github.com/I-am-TonyWu/codex-web/releases/latest). Choose `CodexWebTray.exe`, not GitHub's automatically generated source archive.
 - Windows 10/11 x64 with .NET Framework 4.8 and a working, signed-in Codex Windows desktop installation.

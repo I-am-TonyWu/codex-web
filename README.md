@@ -6,11 +6,11 @@
 
 基于 [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91** 定制，首个公开发行版为 **1.4.3.1**。这是社区项目，与 OpenAI、GitHub、Cloudflare 没有官方隶属关系。不是普通 ChatGPT 网页的镜像，不提供 ChatGPT 聊天权益转发。
 
-当前版本：**1.4.3.4**。详见[更新说明](docs/releases/1.4.3.4.md)，包含自上次公开版 1.4.3.1 以来的变化。
+当前稳定版：**1.4.3.6**。详见[更新说明](docs/releases/1.4.3.6.md)。[全部历史版本与切换方法](docs/RELEASES.md) · [GitHub 全部 Releases](https://github.com/I-am-TonyWu/codex-web/releases)。
 
 ## 下载和系统要求
 
-本次版本相较上次公开版的[完整更新说明](docs/releases/1.4.3.4.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。
+本次版本相较上次公开版的[完整更新说明](docs/releases/1.4.3.6.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。Windows 沙箱问题见[沙箱修复说明](docs/WINDOWS-SANDBOX.md)。
 
 - [下载 Windows x64 托盘程序](https://github.com/I-am-TonyWu/codex-web/releases/latest)。下载 `CodexWebTray.exe`，不要把 GitHub 自动生成的 Source code 压缩包当作安装程序。
 - Windows 10/11 x64、.NET Framework 4.8；需要已安装、登录并能正常工作的 Codex Windows 桌面客户端。

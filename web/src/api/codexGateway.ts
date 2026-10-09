@@ -1,3 +1,4 @@
+import { mutationHeaders, identityHeaders, conversationStates, releaseControl } from './conversationControl'
 import type { ReasoningEffort as UiReasoningEffort } from '../types/codex'
 import { normalizeProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
 import { modelCapabilities } from './modelCapabilities'
@@ -1197,7 +1198,7 @@ export async function upsertThreadAutomation(input: {
 }): Promise<UiThreadAutomation> {
   const response = await fetch('/codex-api/thread-automation', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...await mutationHeaders(input.threadId) },
     body: JSON.stringify(input),
   })
   const payload = await response.json().catch(() => null)
@@ -1236,6 +1237,7 @@ export async function deleteThreadAutomation(threadId: string, automationId?: st
   if (automationId) query.set('automationId', automationId)
   const response = await fetch(`/codex-api/thread-automation?${query.toString()}`, {
     method: 'DELETE',
+    headers: await mutationHeaders(threadId),
   })
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
@@ -1258,7 +1260,7 @@ export async function deleteProjectAutomation(projectName: string, automationId?
 export async function runThreadAutomationNow(threadId: string, automationId: string): Promise<void> {
   const response = await fetch('/codex-api/thread-automation/run', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...await mutationHeaders(threadId) },
     body: JSON.stringify({ threadId, automationId }),
   })
   const payload = await response.json().catch(() => null)
@@ -1291,7 +1293,14 @@ function normalizeThreadTerminalSession(value: unknown): ThreadTerminalSession |
   }
 }
 
+const terminalThreads = new Map<string, string>()
 async function fetchTerminalJson(path: string, init?: RequestInit): Promise<unknown> {
+  if (init?.method === 'POST' && !path.endsWith('/resize')) {
+    const body = JSON.parse(String(init.body ?? '{}'))
+    const threadId = body.threadId || terminalThreads.get(body.sessionId)
+    if (!threadId) throw new Error('无法确认终端所属会话，请刷新终端。')
+    init = { ...init, headers: { ...init.headers, ...await mutationHeaders(threadId) } }
+  }
   const response = await fetch(path, init)
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
@@ -1308,6 +1317,7 @@ export async function attachThreadTerminal(input: ThreadTerminalAttachInput): Pr
   })
   const session = normalizeThreadTerminalSession(asRecord(payload)?.session)
   if (!session) throw new Error('Terminal attach response was malformed')
+  terminalThreads.set(session.id, session.threadId)
   return session
 }
 
@@ -1360,7 +1370,9 @@ export async function closeThreadTerminal(sessionId: string): Promise<void> {
 
 export async function getThreadTerminalSnapshot(threadId: string): Promise<ThreadTerminalSession | null> {
   const payload = await fetchTerminalJson(`/codex-api/thread-terminal-snapshot?threadId=${encodeURIComponent(threadId)}`)
-  return normalizeThreadTerminalSession(asRecord(payload)?.session)
+  const session = normalizeThreadTerminalSession(asRecord(payload)?.session)
+  if (session) terminalThreads.set(session.id, session.threadId)
+  return session
 }
 
 export async function replyToServerRequest(
@@ -1571,8 +1583,9 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
 }
 
 export async function releaseIdleThreadWriter(threadId: string): Promise<boolean> {
-  const result = await callRpc<{ released: boolean }>('codexui/thread/release', { threadId })
-  return result.released
+  if (!conversationStates[threadId]?.proof) return false
+  await releaseControl(threadId)
+  return true
 }
 
 export async function archiveThread(threadId: string): Promise<void> {
@@ -2607,6 +2620,7 @@ function invalidateWorkspaceRootsStateCache(): void {
   workspaceRootsStatePromise = null
 }
 
+let lastQueueSnapshot: ThreadQueueState = {}
 export async function getThreadQueueState(): Promise<ThreadQueueState> {
   const response = await fetch('/codex-api/thread-queue-state')
   const payload = (await response.json()) as unknown
@@ -2617,18 +2631,30 @@ export async function getThreadQueueState(): Promise<ThreadQueueState> {
     payload && typeof payload === 'object' && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
       : {}
-  return normalizeThreadQueueState(envelope.data)
+  lastQueueSnapshot = normalizeThreadQueueState(envelope.data)
+  return lastQueueSnapshot
 }
 
 export async function setThreadQueueState(nextState: ThreadQueueState): Promise<void> {
+  const normalized = normalizeThreadQueueState(nextState)
+  const patch: ThreadQueueState = {}
+  const proofs: Record<string, unknown> = {}
+  for (const threadId of new Set([...Object.keys(lastQueueSnapshot), ...Object.keys(normalized)])) {
+    if (JSON.stringify(lastQueueSnapshot[threadId] ?? []) === JSON.stringify(normalized[threadId] ?? [])) continue
+    await mutationHeaders(threadId, false)
+    patch[threadId] = normalized[threadId] ?? []
+    proofs[threadId] = conversationStates[threadId]?.proof
+  }
+  if (!Object.keys(patch).length) return
   const response = await fetch('/codex-api/thread-queue-state', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(normalizeThreadQueueState(nextState)),
+    headers: { 'Content-Type': 'application/json', ...await identityHeaders() },
+    body: JSON.stringify({ patch, proofs }),
   })
   if (!response.ok) {
-    throw new Error('Failed to save thread queue state')
+    throw new Error('无法保存队列，控制权可能已改变；本机草稿保留，请核对后手动发送。')
   }
+  lastQueueSnapshot = normalized
 }
 
 export async function createWorktree(sourceCwd: string, baseBranch?: string): Promise<WorktreeCreateResult> {
@@ -3043,7 +3069,7 @@ export async function mutateLocalProject(mutation: LocalProjectMutation): Promis
 }
 
 export async function setThreadProject(threadId: string, projectId: string | null): Promise<void> {
-  const response = await fetch('/codex-api/thread-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId, projectId }) })
+  const response = await fetch('/codex-api/thread-project', { method: 'POST', headers: { 'Content-Type': 'application/json', ...await mutationHeaders(threadId) }, body: JSON.stringify({ threadId, projectId }) })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to assign thread project; refresh and retry'))
@@ -3432,7 +3458,7 @@ export async function persistThreadTitle(id: string, title: string): Promise<voi
   try {
     await fetch('/codex-api/thread-titles', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...await mutationHeaders(id, false) },
       body: JSON.stringify({ id, title }),
     })
   } catch {

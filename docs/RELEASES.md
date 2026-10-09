@@ -4,6 +4,7 @@
 
 | 版本 / Version | 类型 / Channel | 内容 / Changes | 下载 / Download |
 |---|---|---|---|
+| 1.4.3.7 | 预览 / Pre-release | 网页终端控制、交接、旧请求拒绝、发送去重；桌面释放暂不可用 | [v1.4.3.7](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.7) |
 | 1.4.3.6 | 稳定 / Stable | 网关错误、原对话重试、闲置释放及主机沙箱修复说明 | [v1.4.3.6](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.6) |
 | 1.4.3.4 | 历史稳定 / Historical stable | 项目归属、桌面项目同步、Mermaid | [v1.4.3.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.4) |
 | 1.4.3.1 | 首个公开版 / First public release | 托盘、身份验证、技能插件和文件访问 | [v1.4.3.1](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.1) |

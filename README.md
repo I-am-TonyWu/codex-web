@@ -6,7 +6,7 @@
 
 基于 [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91** 定制，首个公开发行版为 **1.4.3.1**。这是社区项目，与 OpenAI、GitHub、Cloudflare 没有官方隶属关系。不是普通 ChatGPT 网页的镜像，不提供 ChatGPT 聊天权益转发。
 
-当前稳定版：**1.4.3.6**。详见[更新说明](docs/releases/1.4.3.6.md)。[全部历史版本与切换方法](docs/RELEASES.md) · [GitHub 全部 Releases](https://github.com/I-am-TonyWu/codex-web/releases)。
+当前稳定版：**1.4.3.6**。预览版：**[1.4.3.7](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.7)**（[网页会话控制与交接说明](docs/releases/1.4.3.7.md)）。详见[更新说明](docs/releases/1.4.3.6.md)。[全部历史版本与切换方法](docs/RELEASES.md) · [GitHub 全部 Releases](https://github.com/I-am-TonyWu/codex-web/releases)。
 
 ## 下载和系统要求
 

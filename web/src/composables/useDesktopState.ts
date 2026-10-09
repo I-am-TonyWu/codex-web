@@ -4289,8 +4289,8 @@ export function useDesktopState() {
   }
 
   function persistQueueState(): void {
-    void setThreadQueueState(normalizeQueueStateForPersistence(queuedMessagesByThreadId.value)).catch(() => {
-      // Queue persistence is best-effort; keep the current in-memory queue usable.
+    void setThreadQueueState(normalizeQueueStateForPersistence(queuedMessagesByThreadId.value)).catch((failure) => {
+      error.value = failure instanceof Error ? failure.message : '队列保存失败，请核对控制权。'
     })
   }
 
@@ -5037,7 +5037,7 @@ export function useDesktopState() {
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
       const rejected = pendingTurnRequestByThreadId.value[threadId]
-      if (rejected && isThreadWriterConflict(unknownError)) {
+      if (rejected && (isThreadWriterConflict(unknownError) || unknownError instanceof CodexApiError)) {
         rejectedTurnDraftByThreadId.value = { ...rejectedTurnDraftByThreadId.value, [threadId]: rejected }
       }
       setThreadInProgress(threadId, false)
@@ -5877,6 +5877,7 @@ export function useDesktopState() {
 
     error,
     refreshAll,
+    refreshControlledThread: async (threadId: string) => { await Promise.all([loadMessages(threadId), loadPendingServerRequestsFromBridge()]) },
     refreshSkills,
     selectThread,
     loadMessages,

@@ -399,7 +399,7 @@
             type="button"
             :aria-label="isStopPending ? t('Saving thread before stop is available') : t('Stop')"
             :title="isStopPending ? t('Saving thread before stop is available') : t('Stop')"
-            :disabled="disabled || !activeThreadId || isInterruptingTurn || isStopPending"
+            :disabled="disabled || !activeThreadId || isInterruptingTurn || isStopPending || controlReadOnly"
             @click="onInterrupt"
           >
             <span v-if="isStopPending" class="thread-composer-stop-spinner" aria-hidden="true" />
@@ -452,6 +452,7 @@
 </template>
 
 <script setup lang="ts">
+import { conversationStates } from '../../api/conversationControl'
 import { modelCapabilities, effortLabels } from '../../api/modelCapabilities'
 import type { ZenModelMetadata } from '../../types/zenModels'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -667,7 +668,7 @@ let isHoldPressActive = false
 let dragDepth = 0
 let attachmentSessionToken = 0
 const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
-const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
+const DRAFT_STORAGE_PREFIX = 'codex-web-local.tab-draft.v2.'
 let lastActiveThreadId = ''
 
 const reasoningOptions = computed(() => (modelCapabilities[props.selectedModel]?.efforts ?? []).map(value => ({ value, label: effortLabels[value] ?? value })))
@@ -749,8 +750,12 @@ const skillDropdownOptions = computed(() =>
   ],
 )
 
+const controlReadOnly = computed(() => {
+  const value = conversationStates[props.activeThreadId]
+  return Boolean(value && (value.transferring || (value.owner && !value.proof) || value.activity === 'external'))
+})
 const canSubmit = computed(() => {
-  if (props.disabled) return false
+  if (props.disabled || controlReadOnly.value) return false
   if (props.isUpdatingSpeedMode) return false
   if (!props.activeThreadId) return false
   if (isPlanModeWaitingForModel.value) return false
@@ -1140,7 +1145,7 @@ function loadPersistedDraftForThread(threadId: string): ComposerDraftPayload | n
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return null
   try {
-    const raw = window.localStorage.getItem(getDraftStorageKey(normalizedThreadId))
+    const raw = window.sessionStorage.getItem(getDraftStorageKey(normalizedThreadId)) ?? window.localStorage.getItem('codex-web-local.thread-draft.v1.' + normalizedThreadId)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<ComposerDraftPayload> | string
     if (typeof parsed === 'string') {
@@ -1187,10 +1192,10 @@ function persistDraftForThread(threadId: string, payload: ComposerDraftPayload):
       || payload.fileAttachments.length > 0
       || payload.skills.length > 0
     if (hasContent) {
-      window.localStorage.setItem(getDraftStorageKey(normalizedThreadId), JSON.stringify(payload))
+      window.sessionStorage.setItem(getDraftStorageKey(normalizedThreadId), JSON.stringify(payload))
       return
     }
-    window.localStorage.removeItem(getDraftStorageKey(normalizedThreadId))
+    window.sessionStorage.setItem(getDraftStorageKey(normalizedThreadId), '{}')
   } catch {
     // Ignore localStorage failures (quota/private mode).
   }
@@ -1215,6 +1220,7 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
 }
 
 function onInterrupt(): void {
+  if (controlReadOnly.value) return
   emit('interrupt')
 }
 

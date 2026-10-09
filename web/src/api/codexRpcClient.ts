@@ -1,9 +1,11 @@
+import { rpcControlHeaders, sendRequestId, clearPendingSend, mutationHeaders, refreshControl } from './conversationControl'
 import type { RpcEnvelope, RpcMethodCatalog } from '../types/codex'
 import { CodexApiError, extractErrorMessage, isThreadWriterConflict, THREAD_WRITER_CONFLICT_MESSAGE } from './codexErrors'
 
 type RpcRequestBody = {
   method: string
   params?: unknown
+  requestId?: string
 }
 
 export type RpcNotification = {
@@ -29,6 +31,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
   const body: RpcRequestBody = { method, params: params ?? null }
+  const headers = await rpcControlHeaders(method, params)
+  const threadId = (params as { threadId?: string } | null)?.threadId
+  if (method === 'turn/start' && threadId) body.requestId = await sendRequestId(threadId, body.params)
 
   let response: Response
   try {
@@ -36,6 +41,7 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...headers,
       },
       body: JSON.stringify(body),
     })
@@ -74,9 +80,11 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
   const rpcError = asRecord(payload)?.error
   if (rpcError !== undefined && rpcError !== null) {
     const detail = extractErrorMessage(payload, `RPC ${method} failed`)
+    const serverCode = asRecord(rpcError)?.code
+    if (threadId && body.requestId && serverCode !== 'delivery_uncertain' && serverCode !== 'rpc_error') clearPendingSend(threadId)
     const writerConflict = asRecord(rpcError)?.code === 'thread_writer_conflict' || isThreadWriterConflict(detail)
     throw new CodexApiError(writerConflict ? THREAD_WRITER_CONFLICT_MESSAGE : detail, {
-      code: writerConflict ? 'thread_writer_conflict' : 'rpc_error', method, status: response.status,
+      code: writerConflict ? 'thread_writer_conflict' : serverCode === 'delivery_uncertain' ? 'delivery_uncertain' : typeof serverCode === 'string' && serverCode.startsWith('control_') ? 'control_conflict' : 'rpc_error', method, status: response.status,
     })
   }
 
@@ -88,6 +96,9 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
       status: response.status,
     })
   }
+  if (threadId && body.requestId) clearPendingSend(threadId)
+  const newId = (envelope.result as { thread?: { id?: string } } | null)?.thread?.id
+  if ((method === 'thread/start' || method === 'thread/fork') && newId) await refreshControl(newId)
   return envelope.result
 }
 
@@ -316,12 +327,18 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
 }
 
 export async function respondServerRequest(body: ServerRequestReplyBody): Promise<void> {
+  const pending = (await fetchPendingServerRequests()).find((item) => asRecord(item)?.id === body.id)
+  const params = asRecord(asRecord(pending)?.params)
+  const threadId = String(params?.threadId ?? params?.thread_id ?? '')
+  if (!threadId) throw new CodexApiError('无法确认审批所属会话，请刷新。', { code: 'control_conflict' })
+  const headers = await mutationHeaders(threadId)
   let response: Response
   try {
     response = await fetch('/codex-api/server-requests/respond', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...headers,
       },
       body: JSON.stringify(body),
     })

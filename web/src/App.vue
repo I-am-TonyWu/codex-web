@@ -995,6 +995,7 @@
                     @fork-thread="onForkThreadFromMessage"
                     @continue-on-web="onContinueOnWeb"
                     @retry-writer="onRetryThreadWriter"
+                    @control-acquired="restoreControlDraft"
                     @rollback="onRollback"
                     @implement-plan="onImplementPlan"
                     @respond-server-request="onRespondServerRequest" />
@@ -1484,6 +1485,7 @@ const {
   isUpdatingSpeedMode,
   error: desktopError,
   refreshAll,
+  refreshControlledThread,
   refreshSkills,
   selectThread,
   ensureThreadMessagesLoaded,
@@ -2882,6 +2884,14 @@ async function onForkThread(threadId: string): Promise<void> {
   if (isMobile.value) setSidebarCollapsed(true)
 }
 
+async function restoreControlDraft(): Promise<void> {
+  const threadId = selectedThreadId.value
+  const draft = getPendingThreadDraft(threadId)
+  await refreshControlledThread(threadId).catch(() => undefined)
+  await nextTick()
+  if (draft && selectedThreadId.value === threadId && !threadComposerRef.value?.hasUnsavedDraft()) threadComposerRef.value?.hydrateDraft(draft)
+}
+
 async function onRetryThreadWriter(threadId: string): Promise<void> {
   if (isRetryingThreadWriter.value || isContinuingOnWeb.value || threadId !== selectedThreadId.value) return
   isRetryingThreadWriter.value = true
@@ -3612,7 +3622,11 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
     return
   }
   // Shared state already presents send errors inside the conversation.
-  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex).catch(() => undefined)
+  const originThreadId = selectedThreadId.value
+  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex).catch(async () => {
+    await nextTick()
+    if (originThreadId === selectedThreadId.value && !threadComposerRef.value?.hasUnsavedDraft()) threadComposerRef.value?.hydrateDraft(payload)
+  })
 }
 
 function onEditQueuedMessage(messageId: string): void {

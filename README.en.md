@@ -149,3 +149,5 @@ Layout: `web/` contains the Vue/TypeScript UI and server, `tray/` contains the C
 ## License and acknowledgments
 
 [MIT](LICENSE). Original copyright notices for Pavel Voronin and Igor Levochkin are retained. Windows tray/customizations are maintained in the I-am-TonyWu project. Node.js and dependency licenses are included in the runtime. The GitHub mark links to the upstream project and implies no endorsement. See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+
+Preview: **[1.4.3.7](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.7)**. See [browser control and handoff notes](docs/releases/1.4.3.7.md). Stable downloads remain at `/releases/latest`.

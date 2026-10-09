@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { rpcCall } from './codexRpcClient'
 
+vi.mock('./conversationControl', () => ({ rpcControlHeaders: async () => ({}), sendRequestId: async () => 'fixture-id', clearPendingSend: () => {}, refreshControl: async () => ({}) }))
+
 afterEach(() => vi.unstubAllGlobals())
 
 describe('RPC errors through an HTTP gateway', () => {

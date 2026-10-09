@@ -15,6 +15,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       const page = await browser.newPage({ viewport, colorScheme });
       const errors = [], calls = [], writes = [], forks = [];
       let writerLocked = true;
+      const controlState = { threadId: '11111111-1111-4111-8111-111111111111', epoch: 'fixture', version: 0, owner: null, proof: null, activity: 'idle', turnId: null, transferring: false, desktopReleaseAvailable: false };
       page.on('pageerror', error => errors.push(error.message));
       const original = '11111111-1111-4111-8111-111111111111';
       const thread = { id: original, name: '历史对话恢复测试', preview: '已有历史', cwd: 'C:/Fixture',
@@ -29,6 +30,14 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       await page.route('**/codex-api/**', async route => {
         const pathname = new URL(route.request().url()).pathname;
         let json = { data: [], result: {}, accounts: [], titles: {}, pins: [], prompts: [] };
+        if (pathname.startsWith('/codex-api/control/')) {
+          if (pathname.endsWith('/register')) json = { data: { id: 'fixture', key: 'fixture-key' } };
+          else {
+            if (pathname.endsWith('/claim')) { controlState.version++; controlState.owner = { id: 'fixture', label: '手机网页' }; controlState.proof = { epoch: 'fixture', version: controlState.version, token: 'fixture-token' }; }
+            if (pathname.endsWith('/release')) { controlState.owner = null; controlState.proof = null; controlState.version++; }
+            json = { data: controlState };
+          }
+        }
         if (pathname === '/codex-api/thread-titles') json = { titles: { [original]: thread.name } };
         if (pathname === '/codex-api/workspace-roots-state') json = { data: { order: [], labels: {}, active: [], localProjects: [] } };
         if (pathname === '/codex-api/rpc') {
@@ -64,6 +73,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       if (screenshotDir) {
         fs.mkdirSync(screenshotDir, { recursive: true });
+        await page.waitForTimeout(2200);
         await page.screenshot({ path: path.join(screenshotDir, `${colorScheme}-${viewport.width}-conflict.png`), fullPage: true });
       }
       writerLocked = false;

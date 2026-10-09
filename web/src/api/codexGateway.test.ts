@@ -28,6 +28,8 @@ function mockRpcFetch(): { requests: Array<{ method: string, params: Record<stri
   return { requests }
 }
 
+vi.mock('./conversationControl', () => ({ rpcControlHeaders: async () => ({}), sendRequestId: async () => 'fixture-id', clearPendingSend: () => {}, refreshControl: async () => ({}), mutationHeaders: async () => ({}), identityHeaders: async () => ({}), conversationStates: {} }))
+
 describe('startThreadTurn collaboration mode payloads', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -323,12 +325,14 @@ describe('resumeThread', () => {
 
     const first = resumeThread('stalled-thread')
     void resumeThread('stalled-thread')
+    await Promise.resolve()
     expect(requests).toHaveLength(1)
 
     await vi.advanceTimersByTimeAsync(30_000)
 
     const retried = resumeThread('stalled-thread')
     expect(retried).not.toBe(first)
+    await Promise.resolve()
     expect(requests).toEqual([
       { method: 'thread/resume', params: { threadId: 'stalled-thread' } },
       { method: 'thread/resume', params: { threadId: 'stalled-thread' } },

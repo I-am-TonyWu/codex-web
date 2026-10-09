@@ -14,6 +14,7 @@ import { writeFile } from 'node:fs/promises'
 import { handleAccountRoutes } from './accountRoutes.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
+import { ConversationControl, ControlError, type ControlProof, type ControlClient } from './conversationControl.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
 import { ExtensionCatalog } from './extensionCatalog.js'
@@ -75,6 +76,7 @@ type JsonRpcResponse = {
 type RpcProxyRequest = {
   method: string
   params?: unknown
+  requestId?: string
 }
 
 type RpcExecutor = {
@@ -6583,7 +6585,9 @@ export class BackendQueueProcessor {
   private readonly queueDrainDueAtByThreadId = new Map<string, number>()
   private readonly unsubscribe: () => void
 
-  constructor(private readonly appServer: AppServerProcess) {
+  private readonly origins = new Map<string, { client: ControlClient; proof: ControlProof }>()
+  authorize(threadId: string, client: ControlClient, proof: ControlProof) { this.origins.set(threadId, { client, proof }) }
+  constructor(private readonly appServer: AppServerProcess, private readonly control?: ConversationControl) {
     this.unsubscribe = appServer.onNotification((notification) => {
       if (!isTurnCompletedNotification(notification)) return
       const threadId = extractThreadIdFromNotificationParams(notification.params)
@@ -6637,6 +6641,15 @@ export class BackendQueueProcessor {
   }
 
   async processThreadQueue(threadId: string): Promise<void> {
+    if (this.control) {
+      const origin = this.origins.get(threadId)
+      if (!origin) return // Restarted services never replay an unconfirmed old queue.
+      try { await this.control.mutate(threadId, origin.client, origin.proof, () => this.processAuthorizedQueue(threadId), false) } catch { this.origins.delete(threadId) }
+      return
+    }
+    await this.processAuthorizedQueue(threadId)
+  }
+  private async processAuthorizedQueue(threadId: string): Promise<void> {
     if (this.processingThreadIds.has(threadId)) return
     this.processingThreadIds.add(threadId)
     try {
@@ -6654,8 +6667,9 @@ export class BackendQueueProcessor {
         if (await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
-      } catch {
+      } catch (error) {
         await this.restoreQueuedTurn(next)
+        if (error instanceof ControlError) { this.origins.delete(threadId); return }
         this.scheduleThreadQueueDrain(threadId)
       }
     } catch {
@@ -6673,7 +6687,7 @@ export class BackendQueueProcessor {
   }
 
   private async canStartQueuedTurn(threadId: string): Promise<boolean> {
-    const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: true }))
+    const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: false }))
     const thread = asRecord(response?.thread)
     if (!thread) return false
 
@@ -6816,7 +6830,13 @@ export class BackendQueueProcessor {
 
   private async startQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
     await this.appServer.rpc('thread/resume', { threadId: turn.threadId })
-    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn))
+    const params = await this.buildQueuedTurnParams(turn)
+    const origin = this.origins.get(turn.threadId)
+    if (this.control) {
+      if (!origin) throw new ControlError('control_conflict', '队列控制已失效。')
+      const id = 'queued-' + createHash('sha256').update(turn.message.id).digest('hex')
+      await this.control.journalSend(turn.threadId, origin.client, origin.proof, id, params, () => this.appServer.rpc('turn/start', params))
+    } else await this.appServer.rpc('turn/start', params)
   }
 }
 
@@ -6946,10 +6966,11 @@ type SharedBridgeState = {
   methodCatalog: MethodCatalog
   telegramBridge: TelegramThreadBridge
   backendQueueProcessor: BackendQueueProcessor
+  control: ConversationControl
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'experimental-api-v2-extensions'
+const SHARED_BRIDGE_VERSION = 'conversation-control-1.4.3.7'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -6969,7 +6990,18 @@ function getSharedBridgeState(): SharedBridgeState {
   const appServer = new AppServerProcess()
   const extensions = new ExtensionCatalog(appServer)
   const terminalManager = new ThreadTerminalManager()
-  const backendQueueProcessor = new BackendQueueProcessor(appServer)
+  const control = new ConversationControl(join(getCodexHomeDir(), 'webui-send-receipts.jsonl'))
+  appServer.onNotification((notification) => {
+    const params = asRecord(notification.params)
+    const nested = asRecord(params?.params)
+    const threadId = extractThreadIdFromNotificationParams(notification.params) || extractThreadIdFromNotificationParams(nested)
+    if (!threadId) return
+    if (notification.method === 'turn/started') control.activity(threadId, 'running', readNonEmptyString(asRecord(params?.turn)?.id))
+    if (notification.method === 'turn/completed') control.activity(threadId, 'idle', readNonEmptyString(asRecord(params?.turn)?.id))
+    if (notification.method === 'server/request') control.activity(threadId, 'approval', readNonEmptyString(nested?.turnId))
+    if (notification.method === 'thread/closed') control.activity(threadId, 'idle')
+  })
+  const backendQueueProcessor = new BackendQueueProcessor(appServer, control)
   const created: SharedBridgeState = {
     version: SHARED_BRIDGE_VERSION,
     extensions,
@@ -6977,6 +7009,7 @@ function getSharedBridgeState(): SharedBridgeState {
     terminalManager,
     methodCatalog: new MethodCatalog(),
     backendQueueProcessor,
+    control,
     telegramBridge: new TelegramThreadBridge(appServer, {
       onChatSeen: (chatId) => {
         void rememberTelegramChatId(chatId).catch(() => {})
@@ -7064,7 +7097,7 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 }
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
-  const { appServer, extensions, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor } = getSharedBridgeState()
+  const { appServer, extensions, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, control } = getSharedBridgeState()
   let threadSearchIndex: ThreadSearchIndex | null = null
   let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
 
@@ -7090,6 +7123,36 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       telegramBridge.start()
     })
     .catch(() => {})
+
+  function scopeFor(req: IncomingMessage): string {
+    const cookie = req.headers.cookie ?? ''
+    const session = cookie.match(/(?:^|;\s*)(?:portal_session|CF_Authorization)=([^;]+)/)?.[1] ?? 'local'
+    return createHash('sha256').update(session).digest('hex')
+  }
+  function clientFor(req: IncomingMessage) {
+    return control.authenticate(String(req.headers['x-codex-client'] ?? ''), String(req.headers['x-codex-client-key'] ?? ''), scopeFor(req))
+  }
+  function proofFor(req: IncomingMessage): ControlProof | null {
+    try { return JSON.parse(String(req.headers['x-codex-control'] ?? 'null')) as ControlProof | null } catch { return null }
+  }
+  function checkOrigin(req: IncomingMessage) {
+    if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) throw new ControlError('control_invalid', '请求来源不匹配。')
+  }
+  async function stopAndWait(threadId: string, client: ControlClient) {
+    const state = control.status(threadId, client)
+    if (state.activity === 'idle') return
+    if (!state.turnId || !['running', 'approval'].includes(state.activity)) throw new ControlError('control_unknown', '无法确认活动任务，未执行停止或接管。请刷新核对。')
+    let cleanup = () => {}
+    const completed = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { cleanup(); reject(new ControlError('control_unknown', '停止尚未确认完成，控制权未转移。请刷新核对最新状态。')) }, 15000)
+      const unsubscribe = appServer.onNotification((event) => {
+        if (event.method === 'turn/completed' && extractThreadIdFromNotificationParams(event.params) === threadId) { cleanup(); resolve() }
+      })
+      cleanup = () => { clearTimeout(timer); unsubscribe() }
+    })
+    void completed.catch(() => undefined)
+    try { await appServer.rpc('turn/interrupt', { threadId, turnId: state.turnId }); await completed } finally { cleanup() }
+  }
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const requestStartNs = process.hrtime.bigint()
@@ -7473,14 +7536,15 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Missing threadId or cwd' })
           return
         }
-        const session = terminalManager.attach({
+        checkOrigin(req)
+        const session = await control.mutate(threadId, clientFor(req), proofFor(req), async () => terminalManager.attach({
           threadId,
           cwd,
           sessionId: readNonEmptyString(body?.sessionId) || undefined,
           cols: typeof body?.cols === 'number' ? body.cols : undefined,
           rows: typeof body?.rows === 'number' ? body.rows : undefined,
           newSession: body?.newSession === true,
-        })
+        }))
         setJson(res, 200, { session })
         return
       }
@@ -7498,7 +7562,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Missing sessionId' })
           return
         }
-        terminalManager.write(sessionId, data)
+        checkOrigin(req)
+        const threadId = terminalManager.getThreadId(sessionId)
+        if (!threadId) throw new ControlError('control_invalid', '终端已关闭。')
+        await control.mutate(threadId, clientFor(req), proofFor(req), async () => terminalManager.write(sessionId, data))
         setJson(res, 200, { ok: true })
         return
       }
@@ -7532,7 +7599,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Missing sessionId' })
           return
         }
-        terminalManager.close(sessionId)
+        checkOrigin(req)
+        const threadId = terminalManager.getThreadId(sessionId)
+        if (!threadId) throw new ControlError('control_invalid', '终端已关闭。')
+        await control.mutate(threadId, clientFor(req), proofFor(req), async () => terminalManager.close(sessionId))
         setJson(res, 200, { ok: true })
         return
       }
@@ -7550,6 +7620,34 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'POST' && url.pathname === '/codex-api/upload-file') {
         handleFileUpload(req, res)
         return
+      }
+
+      if (url.pathname.startsWith('/codex-api/control/')) {
+        checkOrigin(req)
+        res.setHeader('Cache-Control', 'no-store')
+        const route = url.pathname.slice('/codex-api/control/'.length)
+        if (req.method === 'POST' && route === 'register') {
+          const body = asRecord(await readJsonBody(req))
+          const client = control.register(scopeFor(req), readNonEmptyString(body?.label) || '网页终端')
+          setJson(res, 200, { data: { id: client.id, key: client.key, epoch: control.epoch } }); return
+        }
+        const client = clientFor(req)
+        if (req.method === 'GET' && route === 'receipt') {
+          setJson(res, 200, { data: await control.receipt(url.searchParams.get('id') ?? '', client) }); return
+        }
+        const body = req.method === 'POST' ? asRecord(await readJsonBody(req)) : null
+        const threadId = readNonEmptyString(body?.threadId) || url.searchParams.get('threadId') || ''
+        if (req.method === 'GET' && route === 'state') { setJson(res, 200, { data: control.status(threadId, client) }); return }
+        if (req.method === 'POST' && route === 'claim') {
+          const data = await control.claim(threadId, client, readNonEmptyString(body?.epoch), Number(body?.version), body?.takeover === true,
+            body?.stop === true ? () => stopAndWait(threadId, client) : undefined)
+          setJson(res, 200, { data }); return
+        }
+        if (req.method === 'POST' && route === 'heartbeat') { setJson(res, 200, { data: control.heartbeat(threadId, client, proofFor(req)) }); return }
+        if (req.method === 'POST' && route === 'release') {
+          setJson(res, 200, { data: await control.release(threadId, client, proofFor(req), () => appServer.rpc('codexui/thread/release', { threadId })) }); return
+        }
+        setJson(res, 404, { error: 'Unknown control operation' }); return
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/rpc') {
@@ -7577,7 +7675,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
         let rpcResult: unknown
         try {
-          rpcResult = await callRpcWithArchiveRecovery(appServer, body.method, body.params ?? null)
+          const params = asRecord(body.params)
+          const threadId = readNonEmptyString(params?.threadId)
+          const method = body.method
+          const mutates = method.startsWith('turn/') || (method.startsWith('thread/') && !['thread/read', 'thread/list', 'thread/loaded/list', 'thread/goal/get'].includes(method)) || method === 'codexui/thread/release'
+          const run = async () => {
+            try {
+              const result = await callRpcWithArchiveRecovery(appServer, method, body.params ?? null)
+              const thread = asRecord(asRecord(result)?.thread)
+              const turn = asRecord(asRecord(result)?.turn)
+              if (threadId && method === 'turn/start') control.activity(threadId, ['completed', 'failed', 'interrupted'].includes(readNonEmptyString(turn?.status)) ? 'idle' : 'running', readNonEmptyString(turn?.id))
+              if (threadId && method === 'thread/resume') control.activity(threadId, asRecord(result)?.webReadOnlyReason === 'thread_writer_conflict' ? 'external' : ['active', 'inProgress', 'running'].includes(readNonEmptyString(asRecord(thread?.status)?.type)) ? 'running' : 'idle')
+              if (method === 'thread/fork' && thread?.id && typeof thread.id === 'string') { await control.claim(thread.id, clientFor(req), control.epoch, 0, false); control.activity(thread.id, 'idle') }
+              return result
+            } catch (error) {
+              if (threadId && /already has an active writer/iu.test(String(error))) control.activity(threadId, 'external')
+              throw error
+            }
+          }
+          if (mutates) {
+            checkOrigin(req)
+            const client = clientFor(req)
+            if (threadId) {
+              rpcResult = method === 'turn/start'
+                ? await control.sendOnce(threadId, client, proofFor(req), body.requestId ?? '', body.params, run)
+                : await control.mutate(threadId, client, proofFor(req), run)
+            } else {
+              if (method !== 'thread/start') throw new ControlError('control_invalid', '会话操作缺少 threadId。')
+              rpcResult = await run()
+              const newId = readNonEmptyString(asRecord(asRecord(rpcResult)?.thread)?.id)
+              if (newId) { await control.claim(newId, client, control.epoch, 0, false); control.activity(newId, 'idle') }
+            }
+          } else rpcResult = await run()
         } catch (error) {
 	          if (body.method === 'account/rateLimits/read' && isUnauthenticatedRateLimitError(error)) {
 	            setJson(res, 200, { result: null })
@@ -7956,7 +8085,18 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/server-requests/respond') {
         const payload = await readJsonBody(req)
-        await appServer.respondToServerRequest(payload)
+        checkOrigin(req)
+        const requestId = asRecord(payload)?.id
+        const pending = appServer.listPendingServerRequests().find((item) => item.id === requestId)
+        if (!pending) throw new ControlError('control_invalid', '审批已结束或不再存在，请刷新。')
+        const threadId = extractThreadIdFromNotificationParams(pending.params)
+        if (!threadId) throw new ControlError('control_unknown', '无法确认审批所属会话，未提交回应。')
+        const client = clientFor(req)
+        await control.mutate(threadId, client, proofFor(req), async () => {
+          await appServer.respondToServerRequest(payload)
+          const state = control.status(threadId, client)
+          control.activity(threadId, 'running', state.turnId)
+        })
         setJson(res, 200, { ok: true })
         return
       }
@@ -8651,12 +8791,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Invalid thread project assignment' }); return
         }
         try {
-          await queueWorkspaceRootsMutation(async () => {
+          checkOrigin(req)
+          await control.mutate(mutation.threadId as string, clientFor(req), proofFor(req), () => queueWorkspaceRootsMutation(async () => {
             const path = getCodexGlobalStatePath()
             const snapshot = await readFile(path, 'utf8')
             const next = applyThreadProjectMutation(asRecord(JSON.parse(snapshot)) ?? {}, { threadId: mutation.threadId as string, projectId: mutation.projectId as string | null })
             await writeWorkspaceStateSnapshot(path, snapshot, next)
-          })
+          }))
         } catch (error) {
           setJson(res, 409, { error: error instanceof Error ? error.message : 'Failed to assign thread project' }); return
         }
@@ -8686,7 +8827,22 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Invalid body: expected object' })
           return
         }
-        await writeThreadQueueState(normalizeThreadQueueState(record))
+        checkOrigin(req)
+        const client = clientFor(req)
+        const patch = asRecord(record.patch)
+        const proofs = asRecord(record.proofs)
+        if (!patch || !proofs) throw new ControlError('control_invalid', '请刷新网页更新队列格式。')
+        for (const threadId of Object.keys(patch)) {
+          const proof = asRecord(proofs[threadId]) as ControlProof | null
+          await control.mutate(threadId, client, proof, async () => {
+            await withThreadQueueStateUpdate((state) => {
+              const next = { ...state }; const normalized = normalizeThreadQueueState({ [threadId]: patch[threadId] })
+              if (normalized[threadId]) next[threadId] = normalized[threadId]; else delete next[threadId]
+              return { nextState: next, result: undefined }
+            })
+            backendQueueProcessor.authorize(threadId, client, proof!)
+          })
+        }
         void backendQueueProcessor.scheduleAllQueuedThreads()
         setJson(res, 200, { ok: true })
         return
@@ -9042,9 +9198,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Missing id' })
           return
         }
-        const cache = await readThreadTitleCache()
-        const next = title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id)
-        await writeThreadTitleCache(next)
+        checkOrigin(req)
+        await control.mutate(id, clientFor(req), proofFor(req), async () => {
+          const cache = await readThreadTitleCache()
+          const next = title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id)
+          await writeThreadTitleCache(next)
+        })
         setJson(res, 200, { ok: true })
         return
       }
@@ -9077,7 +9236,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'threadId, name, prompt, and rrule are required' })
           return
         }
-        const automation = await writeThreadHeartbeatAutomation({ threadId, id, name, prompt, rrule, status })
+        checkOrigin(req)
+        const automation = await control.mutate(threadId, clientFor(req), proofFor(req), () => writeThreadHeartbeatAutomation({ threadId, id, name, prompt, rrule, status }))
         setJson(res, 200, { data: toAutomationApiRecord(automation) })
         return
       }
@@ -9116,7 +9276,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 404, { error: 'Automation not found for thread' })
           return
         }
-        await appendThreadQueuedMessage(threadId, buildHeartbeatQueuedMessage(automation))
+        checkOrigin(req)
+        const client = clientFor(req), proof = proofFor(req)
+        await control.mutate(threadId, client, proof, async () => {
+          await appendThreadQueuedMessage(threadId, buildHeartbeatQueuedMessage(automation))
+          backendQueueProcessor.authorize(threadId, client, proof!)
+        })
         backendQueueProcessor.scheduleThreadQueueDrain(threadId, 0)
         setJson(res, 200, { data: { queued: true } })
         return
@@ -9129,7 +9294,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Missing threadId' })
           return
         }
-        const removed = await deleteThreadHeartbeatAutomation(threadId, automationId)
+        checkOrigin(req)
+        const removed = await control.mutate(threadId, clientFor(req), proofFor(req), () => deleteThreadHeartbeatAutomation(threadId, automationId))
         setJson(res, 200, { data: { removed } })
         return
       }
@@ -9228,10 +9394,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (rpcMethod) {
         // RPC rejection is a valid application response. HTTP 502 lets an edge
         // proxy replace our actionable error with its generic HTML gateway page.
-        const code = /already has an active writer/iu.test(message) ? 'thread_writer_conflict' : 'rpc_error'
+        const code = error instanceof ControlError ? error.code : /already has an active writer/iu.test(message) ? 'thread_writer_conflict' : 'rpc_error'
         console.warn(`[codex-rpc] ${rpcMethod} rejected (${code})`)
         res.setHeader('Cache-Control', 'no-store')
         setJson(res, 200, { error: { code, message } })
+      } else if (error instanceof ControlError) {
+        setJson(res, 409, { error: { code: error.code, message } })
       } else {
         setJson(res, 502, { error: message })
       }

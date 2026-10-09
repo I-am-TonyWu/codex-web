@@ -11,6 +11,8 @@ export type CodexErrorCode =
   | 'invalid_response'
   | 'unknown_error'
   | 'thread_writer_conflict'
+  | 'control_conflict'
+  | 'delivery_uncertain'
 
 export const THREAD_WRITER_CONFLICT_MESSAGE = '此对话的写入权仍被另一个 Codex 后台会话占用。离开聊天页面后，后台也可能继续持有它。释放后可点“重试原对话”，继续使用同一条历史；也可点“在网页接续”创建独立分支。此条消息未发送。'
 

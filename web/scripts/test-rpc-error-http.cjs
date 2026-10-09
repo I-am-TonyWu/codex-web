@@ -34,13 +34,35 @@ async function start(port) {
   }
   throw Error('Readiness timed out');
 }
+const identities = new Map();
+async function controlPost(base, route, data, proof) {
+  let identity = identities.get(base);
+  if (!identity) {
+    const r = await fetch(base + '/codex-api/control/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Fixture' }) });
+    identity = (await r.json()).data; identities.set(base, identity);
+  }
+  if (route === '__identity') return identity;
+  const headers = { 'Content-Type': 'application/json', 'x-codex-client': identity.id, 'x-codex-client-key': identity.key, 'x-codex-control': JSON.stringify(proof || null) };
+  const response = await fetch(base + '/codex-api/control/' + route, { method: 'POST', headers, body: JSON.stringify(data) });
+  return (await response.json()).data;
+}
 async function rpc(base, method, params) {
-  const response = await fetch(base + '/codex-api/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ method, params }), signal: AbortSignal.timeout(25000) });
+  await controlPost(base, '__identity', {});
+  const identity = identities.get(base);
+  const headers = { 'Content-Type': 'application/json', 'x-codex-client': identity.id, 'x-codex-client-key': identity.key };
+  const mutates = method.startsWith('turn/') || (method.startsWith('thread/') && !['thread/read', 'thread/list', 'thread/loaded/list'].includes(method)) || method === 'codexui/thread/release';
+  if (mutates && params?.threadId) {
+    const state = (await (await fetch(base + '/codex-api/control/state?threadId=' + params.threadId, { headers })).json()).data;
+    const owned = state.proof ? state : await controlPost(base, 'claim', { threadId: params.threadId, epoch: state.epoch, version: state.version, takeover: true });
+    headers['x-codex-control'] = JSON.stringify(owned.proof);
+  }
+  const response = await fetch(base + '/codex-api/rpc', { method: 'POST', headers,
+    body: JSON.stringify({ method, params, requestId: require('node:crypto').randomUUID() }), signal: AbortSignal.timeout(25000) });
   assert.equal(response.status, 200, `${method} must retain JSON through a gateway`);
   assert.match(response.headers.get('content-type'), /application\/json/);
   return response.json();
 }
+
 (async () => {
   await new Promise(resolve => provider.listen(4199, '127.0.0.1', resolve));
   const first = await start(4197), second = await start(4198);

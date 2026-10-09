@@ -13,7 +13,7 @@ sandbox = "mxc"
 
 1.4.3.6 的 EXE 保留现有主机配置；换回此版本不会重置 MXC、密码或 Access Token。发行包不包含个人 config.toml。新主机需要先确认当前 Codex Windows 版本支持 MXC，备份原配置，修改已有 `[windows]` 节中的 `sandbox`（不要重复添加同名节），然后在没有执行任务时重开 Codex 和托盘，验证实际命令、文件访问和网络限制。
 
-不能对所有 Windows/Codex 版本无条件套用此选项，也不要删除锁、强制结束运行中的工具或设置 `danger-full-access` 来掩盖初始化失败。可参考 [OpenAI Windows 沙箱说明](https://learn.chatgpt.com/docs/windows-sandbox)。
+不能对所有 Windows/Codex 版本无条件套用此选项，也不要删除锁、强制结束运行中的工具或设置 `danger-full-access` 来掩盖初始化失败。可参考 [OpenAI Windows 沙箱说明](https://learn.chatgpt.com/docs/windows/windows-sandbox)。
 
 ## English
 

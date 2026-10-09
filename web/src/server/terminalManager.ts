@@ -160,6 +160,8 @@ export class ThreadTerminalManager {
     return this.toSnapshot(session)
   }
 
+  getThreadId(sessionId: string): string | null { return this.sessions.get(sessionId)?.threadId ?? null }
+
   write(sessionId: string, data: string): void {
     this.requireAvailable()
     const session = this.requireSession(sessionId)

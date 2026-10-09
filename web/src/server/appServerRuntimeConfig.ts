@@ -75,6 +75,10 @@ export function buildAppServerArgs(): string[] {
     `sandbox_mode="${config.sandboxMode}"`,
     '-c',
     `features.memories=${config.memories ? 'true' : 'false'}`,
+    // The web client explicitly unsubscribes idle writers. Do not retain their
+    // locks for the native default 60 seconds after that acknowledgement.
+    '-c',
+    'thread_unload_delay_secs=0',
   ]
 }
 

@@ -13,6 +13,7 @@ import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { handleAccountRoutes } from './accountRoutes.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
+import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
 import { ExtensionCatalog } from './extensionCatalog.js'
@@ -5974,6 +5975,7 @@ class AppServerProcess {
   private readonly liveStateCache = new Map<string, { data: unknown; turnCount: number; sessionSize: number }>()
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
+  private readonly writerLifecycle = new ThreadWriterLifecycle()
 
 
   private getCodexCommand(): string {
@@ -6127,6 +6129,11 @@ class AppServerProcess {
     }
     for (const listener of this.notificationListeners) {
       listener(notification)
+    }
+    if (notification.method === 'turn/completed' && nThreadId) {
+      // Completion is not ownership release. Unsubscribe only after confirming
+      // this process is idle; serialize with sends and backend queued work.
+      void this.releaseIdleWriter(nThreadId).catch(() => undefined)
     }
   }
 
@@ -6452,7 +6459,36 @@ class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
-    return this.call(method, params)
+    const threadId = this.extractThreadIdFromParams(params)
+    if (method === 'codexui/thread/release' && threadId) {
+      return { released: await this.releaseIdleWriter(threadId) }
+    }
+    const operation = async () => {
+      try {
+        return await this.call(method, params)
+      } catch (error) {
+        // An idle session may have been unloaded after its last turn. This
+        // rejection occurs before a turn exists, so one resume is safe.
+        if (method !== 'turn/start' || !threadId || !isThreadNotFoundError(error)) throw error
+        await this.call('thread/resume', { threadId })
+        return this.call(method, params)
+      }
+    }
+    const changesWriter = /^(?:turn\/(?:start|steer)|thread\/(?:resume|unsubscribe|archive|rollback|name\/set))$/u.test(method)
+    return threadId && changesWriter
+      ? this.writerLifecycle.run(threadId, operation)
+      : operation()
+  }
+
+  private async releaseIdleWriter(threadId: string): Promise<boolean> {
+    const process = this.process
+    if (!process || this.stopping) return false
+    const released = await this.writerLifecycle.releaseIdle(threadId, (method, params) => {
+      if (this.process !== process || this.stopping) throw new Error('app-server changed during writer release')
+      return this.call(method, params)
+    }, () => watchThreadClosed(threadId, listener => this.onNotification(listener)))
+    if (released) this.emitNotification({ method: 'web/thread/writerReleased', params: { threadId } })
+    return released
   }
 
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {

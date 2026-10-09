@@ -593,8 +593,13 @@
                     </button>
                   </template>
                 </div>
+                <button v-if="isTurnErrorMessage(message) && isThreadWriterConflict(message.text)" type="button"
+                  class="writer-continuation-button" :disabled="isRetryingThreadWriter || isContinuingOnWeb"
+                  @click="emit('retryWriter', activeThreadId)">
+                  {{ isRetryingThreadWriter ? '正在重新连接…' : '重试原对话' }}
+                </button>
                 <button v-if="isTurnErrorMessage(message) && isThreadWriterConflict(message.text)"
-                  type="button" class="writer-continuation-button" :disabled="isContinuingOnWeb"
+                  type="button" class="writer-continuation-button" :disabled="isContinuingOnWeb || isRetryingThreadWriter"
                   @click="emit('continueOnWeb', activeThreadId)">
                   {{ isContinuingOnWeb ? '正在创建接续对话…' : '在网页接续（保留原对话）' }}
                 </button>
@@ -753,7 +758,12 @@
               <div v-if="liveOverlay.errorText" class="live-overlay-error">
                 <span>{{ liveOverlay.errorText }}</span>
                 <button v-if="isThreadWriterConflict(liveOverlay.errorText)" type="button"
-                  class="writer-continuation-button" :disabled="isContinuingOnWeb"
+                  class="writer-continuation-button" :disabled="isRetryingThreadWriter || isContinuingOnWeb"
+                  @click="emit('retryWriter', activeThreadId)">
+                  {{ isRetryingThreadWriter ? '正在重新连接…' : '重试原对话' }}
+                </button>
+                <button v-if="isThreadWriterConflict(liveOverlay.errorText)" type="button"
+                  class="writer-continuation-button" :disabled="isContinuingOnWeb || isRetryingThreadWriter"
                   @click="emit('continueOnWeb', activeThreadId)">
                   {{ isContinuingOnWeb ? '正在创建接续对话…' : '在网页接续（保留原对话）' }}
                 </button>
@@ -1330,6 +1340,7 @@ const props = defineProps<{
   activeThreadId: string
   cwd: string
   isContinuingOnWeb?: boolean
+  isRetryingThreadWriter?: boolean
   hasMorePersistedAbove?: boolean
   isLoadingPersistedAbove?: boolean
   loadEarlierMessages?: (threadId: string) => Promise<void>
@@ -1338,6 +1349,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnIndex: number }]
   continueOnWeb: [threadId: string]
+  retryWriter: [threadId: string]
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]

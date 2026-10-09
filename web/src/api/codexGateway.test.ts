@@ -214,6 +214,15 @@ describe('thread goals', () => {
 })
 
 describe('resumeThread', () => {
+  it('rechecks ownership immediately after a read-only result instead of caching the conflict', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ result: { thread: { turns: [] }, webReadOnlyReason: 'thread_writer_conflict' } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ result: { thread: { turns: [] } } })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(resumeThread('released-fixture')).resolves.toMatchObject({ readOnly: true })
+    await expect(resumeThread('released-fixture')).resolves.toMatchObject({ readOnly: false })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()

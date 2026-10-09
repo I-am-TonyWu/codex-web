@@ -1563,13 +1563,16 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
   }, RESUME_THREAD_COALESCE_TTL_MS)
   void promise.finally(() => {
     globalThis.clearTimeout(hardEvictionTimer)
-    globalThis.setTimeout(() => {
-      if (recentResumeThreadById.get(threadId) === promise) {
-        recentResumeThreadById.delete(threadId)
-      }
-    }, 2000)
+    // Coalesce in-flight requests only. Ownership can change immediately after
+    // a response, especially when an idle writer is released.
+    if (recentResumeThreadById.get(threadId) === promise) recentResumeThreadById.delete(threadId)
   }).catch(() => undefined)
   return promise
+}
+
+export async function releaseIdleThreadWriter(threadId: string): Promise<boolean> {
+  const result = await callRpc<{ released: boolean }>('codexui/thread/release', { threadId })
+  return result.released
 }
 
 export async function archiveThread(threadId: string): Promise<void> {

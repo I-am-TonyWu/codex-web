@@ -987,12 +987,14 @@
                     :active-thread-id="composerThreadContextId" :cwd="composerCwd"
                     :live-overlay="liveOverlay"
                     :is-continuing-on-web="isContinuingOnWeb"
+                    :is-retrying-thread-writer="isRetryingThreadWriter"
                     :pending-requests="selectedThreadServerRequests"
                     :has-more-persisted-above="hasMoreOlderMessages"
                     :is-loading-persisted-above="isLoadingOlderMessages"
                     :load-earlier-messages="loadOlderMessages"
                     @fork-thread="onForkThreadFromMessage"
                     @continue-on-web="onContinueOnWeb"
+                    @retry-writer="onRetryThreadWriter"
                     @rollback="onRollback"
                     @implement-plan="onImplementPlan"
                     @respond-server-request="onRespondServerRequest" />
@@ -1490,6 +1492,7 @@ const {
   toggleSelectedThreadTerminal,
   archiveThreadById,
   forkThreadById,
+  retryThreadWriter,
   getPendingThreadDraft,
   renameThreadById,
   forkThreadFromTurn,
@@ -1553,6 +1556,7 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
 const isContinuingOnWeb = ref(false)
+const isRetryingThreadWriter = ref(false)
 const threadConversationRef = ref<{ jumpToLatest: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const threadTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
@@ -2878,8 +2882,24 @@ async function onForkThread(threadId: string): Promise<void> {
   if (isMobile.value) setSidebarCollapsed(true)
 }
 
+async function onRetryThreadWriter(threadId: string): Promise<void> {
+  if (isRetryingThreadWriter.value || isContinuingOnWeb.value || threadId !== selectedThreadId.value) return
+  isRetryingThreadWriter.value = true
+  const draft = getPendingThreadDraft(threadId)
+  try {
+    if (await retryThreadWriter(threadId)) {
+      await nextTick()
+      if (draft && threadId === selectedThreadId.value && !threadComposerRef.value?.hasUnsavedDraft()) {
+        threadComposerRef.value?.hydrateDraft(draft)
+      }
+    }
+  } finally {
+    isRetryingThreadWriter.value = false
+  }
+}
+
 async function onContinueOnWeb(threadId: string): Promise<void> {
-  if (isContinuingOnWeb.value || threadId !== selectedThreadId.value) return
+  if (isContinuingOnWeb.value || isRetryingThreadWriter.value || threadId !== selectedThreadId.value) return
   isContinuingOnWeb.value = true
   const draft = getPendingThreadDraft(threadId)
   try {

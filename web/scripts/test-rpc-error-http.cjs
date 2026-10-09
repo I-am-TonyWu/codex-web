@@ -3,7 +3,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const assert = require('node:assert/strict');
+const http = require('node:http');
+let syntheticProviderRequests = 0;
+const provider = http.createServer((req, res) => { syntheticProviderRequests++; req.resume(); res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Synthetic provider fixture; no real model request', type: 'invalid_request_error' } })); });
 const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'codex-rpc-isolated-'));
+fs.writeFileSync(path.join(home, 'config.toml'), `[model_providers.fixture]
+name = "Local fixture"
+base_url = "http://127.0.0.1:4199/v1"
+wire_api = "responses"
+requires_openai_auth = false
+request_max_retries = 0
+stream_max_retries = 0
+`);
 const children = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function start(port) {
@@ -31,11 +42,12 @@ async function rpc(base, method, params) {
   return response.json();
 }
 (async () => {
+  await new Promise(resolve => provider.listen(4199, '127.0.0.1', resolve));
   const first = await start(4197), second = await start(4198);
   const rejected = await rpc(second, 'turn/start', { threadId: 'invalid-fixture-id', input: [{ type: 'text', text: 'never reaches a model' }] });
   assert.equal(rejected.error.code, 'rpc_error');
   assert.match(rejected.error.message, /invalid thread id/);
-  const started = await rpc(first, 'thread/start', { cwd: home, model: 'gpt-6.1-sol', persistExtendedHistory: true });
+  const started = await rpc(first, 'thread/start', { cwd: home, model: 'gpt-6.1-sol', modelProvider: 'fixture', persistExtendedHistory: true });
   assert.ok(started.result?.thread?.id, JSON.stringify(started));
   const originalId = started.result.thread.id;
   const named = await rpc(first, 'thread/name/set', { threadId: originalId, name: 'Isolated writer fixture' });
@@ -43,14 +55,42 @@ async function rpc(base, method, params) {
   const readOnly = await rpc(second, 'thread/resume', { threadId: originalId });
   assert.equal(readOnly.result?.webReadOnlyReason, 'thread_writer_conflict', JSON.stringify(readOnly));
   assert.equal(readOnly.result.thread.id, originalId);
+  const cannotReleaseOtherOwner = await rpc(second, 'codexui/thread/release', { threadId: originalId });
+  assert.equal(cannotReleaseOtherOwner.result?.released, false);
+  const handoffStartedAt = Date.now();
+  const releasedOriginal = await rpc(first, 'codexui/thread/release', { threadId: originalId });
+  assert.equal(releasedOriginal.result?.released, true, JSON.stringify(releasedOriginal));
+  const sameOriginal = await rpc(second, 'thread/resume', { threadId: originalId });
+  assert.equal(sameOriginal.result?.thread?.id, originalId);
+  assert.ok(!sameOriginal.result.webReadOnlyReason, JSON.stringify(sameOriginal));
+  const originalHandoffMs = Date.now() - handoffStartedAt;
+  await rpc(second, 'codexui/thread/release', { threadId: originalId });
+  await rpc(first, 'thread/resume', { threadId: originalId });
   const forked = await rpc(second, 'thread/fork', { threadId: originalId, cwd: home, model: 'gpt-6.1-sol' });
   assert.ok(forked.result?.thread?.id, JSON.stringify(forked));
   assert.notEqual(forked.result.thread.id, originalId);
   const resumedFork = await rpc(second, 'thread/resume', { threadId: forked.result.thread.id });
   assert.ok(resumedFork.result && !resumedFork.result.webReadOnlyReason, JSON.stringify(resumedFork));
-  console.log(JSON.stringify({ passed: true, isolatedHome: true, modelRequests: 0,
-    scenarios: ['RPC rejection stays HTTP 200 JSON', 'desktop writer conflict stays readable', 'explicit fork acquires independent writer'] }));
+  // A real app-server completes a failed turn against a localhost-only provider.
+  // This validates the automatic notification hook without using an account/model.
+  const simulatedTurn = await rpc(first, 'turn/start', { threadId: originalId,
+    input: [{ type: 'text', text: 'Local lifecycle fixture only' }] });
+  assert.ok(simulatedTurn.result?.turn?.id, JSON.stringify(simulatedTurn));
+  let unloaded = false;
+  for (let i = 0; i < 80; i++) {
+    const metadata = await rpc(first, 'thread/read', { threadId: originalId, includeTurns: false });
+    if (metadata.result?.thread?.status?.type === 'notLoaded') { unloaded = true; break; }
+    await delay(100);
+  }
+  assert.equal(unloaded, true, 'completion must gracefully unload its own idle writer');
+  assert.ok(syntheticProviderRequests > 0);
+  const reclaimed = await rpc(second, 'thread/resume', { threadId: originalId });
+  assert.equal(reclaimed.result?.thread?.id, originalId);
+  assert.ok(!reclaimed.result?.webReadOnlyReason, JSON.stringify(reclaimed));
+  console.log(JSON.stringify({ passed: true, isolatedHome: true, realModelRequests: 0, syntheticProviderRequests, originalHandoffMs,
+    scenarios: ['RPC rejection stays HTTP 200 JSON', 'desktop writer conflict stays readable', 'explicit fork acquires independent writer', 'other owner is never released', 'original ID survives handoff', 'completed turn automatically releases idle writer'] }));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
+  provider.close();
   for (const child of children) {
     if (process.platform === 'win32' && child.pid) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     else child.kill();

@@ -34,6 +34,7 @@ import {
   persistThreadTitle,
   generateThreadTitle,
   resumeThread,
+  releaseIdleThreadWriter,
 
   startThread,
   subscribeCodexNotifications,
@@ -1734,6 +1735,12 @@ export function useDesktopState() {
 
   function setSelectedThreadId(nextThreadId: string, options: { persist?: boolean } = {}): void {
     if (selectedThreadId.value === nextThreadId) return
+    const previousThreadId = selectedThreadId.value
+    if (previousThreadId && resumedThreadById.value[previousThreadId] === true && !inProgressById.value[previousThreadId]) {
+      void releaseIdleThreadWriter(previousThreadId).then((released) => {
+        if (released) resumedThreadById.value = omitKey(resumedThreadById.value, previousThreadId)
+      }).catch(() => undefined)
+    }
     selectedThreadId.value = nextThreadId
     if (options.persist !== false) {
       saveSelectedThreadId(nextThreadId)
@@ -4043,6 +4050,10 @@ export function useDesktopState() {
       clearLiveReasoningForThread(notificationThreadId)
     }
 
+    if (notification.method === 'web/thread/writerReleased' || notification.method === 'thread/closed') {
+      resumedThreadById.value = omitKey(resumedThreadById.value, notificationThreadId)
+    }
+
     if (notification.method === 'turn/completed') {
       activeReasoningItemId = ''
       shouldAutoScrollOnNextAgentEvent = false
@@ -4482,9 +4493,9 @@ export function useDesktopState() {
         return
       }
 
-      const needsResume = resumedThreadById.value[threadId] !== true
-      const resumedThread = needsResume ? await resumeThread(threadId) : null
-      const detail = resumedThread ?? await getThreadDetail(threadId)
+      // Viewing history must not reserve the single writer for this web process.
+      // Acquire ownership only when sending, not when browsing or refreshing.
+      const detail = await getThreadDetail(threadId)
 
       if (detail.modelProvider) {
         setThreadModelProviderId(threadId, detail.modelProvider)
@@ -4492,13 +4503,6 @@ export function useDesktopState() {
       if (detail.model && !normalizeStoredModelId(selectedModelIdByContext.value[threadId])) {
         setThreadModelId(threadId, resolveThreadModelForProvider(threadId, detail.model, detail.modelProvider))
       }
-      if (resumedThread) {
-        resumedThreadById.value = {
-          ...resumedThreadById.value,
-          [threadId]: resumedThread.readOnly !== true,
-        }
-      }
-
       const { messages: nextMessages, inProgress, activeTurnId, turnIndexByTurnId } = detail
       hasMoreOlderMessagesByThreadId.value = {
         ...hasMoreOlderMessagesByThreadId.value,
@@ -5138,6 +5142,23 @@ export function useDesktopState() {
       error.value = errorMessage
       isSendingMessage.value = false
       throw unknownError
+    }
+  }
+
+  async function retryThreadWriter(threadId: string): Promise<boolean> {
+    try {
+      const resumed = await resumeThread(threadId)
+      if (resumed.readOnly) throw new CodexApiError(THREAD_WRITER_CONFLICT_MESSAGE, { code: 'thread_writer_conflict', method: 'thread/resume' })
+      resumedThreadById.value = { ...resumedThreadById.value, [threadId]: true }
+      setTurnErrorForThread(threadId, null)
+      setTurnActivityForThread(threadId, null)
+      error.value = ''
+      return true
+    } catch (unknownError) {
+      const message = unknownError instanceof Error ? unknownError.message : '无法重新连接对话'
+      setTurnErrorForThread(threadId, message)
+      error.value = message
+      return false
     }
   }
 
@@ -5866,6 +5887,7 @@ export function useDesktopState() {
     archiveThreadById,
     renameThreadById,
     forkThreadById,
+    retryThreadWriter,
     getPendingThreadDraft: (threadId: string) => {
       const pending = rejectedTurnDraftByThreadId.value[threadId] ?? pendingTurnRequestByThreadId.value[threadId]
       return pending ? {

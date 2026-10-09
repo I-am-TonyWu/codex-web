@@ -32,6 +32,7 @@ const gatewayMocks = vi.hoisted(() => ({
   renameThread: vi.fn(),
   replyToServerRequest: vi.fn(),
   resumeThread: vi.fn(),
+  releaseIdleThreadWriter: vi.fn(),
   revertThreadFileChanges: vi.fn(),
   rollbackThread: vi.fn(),
   setCodexSpeedMode: vi.fn(),
@@ -83,6 +84,8 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  gatewayMocks.releaseIdleThreadWriter.mockResolvedValue(false)
+  gatewayMocks.getThreadDetail.mockResolvedValue({ model: 'gpt-6.1-sol', modelProvider: 'openai', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
@@ -93,6 +96,35 @@ afterEach(() => {
 })
 
 describe('desktop writer conflict', () => {
+  it('browses history without acquiring a writer', async () => {
+    installTestWindow()
+    const state = useDesktopState()
+    state.primeSelectedThread('history-only')
+    await state.loadMessages('history-only')
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('history-only')
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+  })
+
+  it('reconnects the original after release and preserves the rejected draft without sending', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValueOnce({ readOnly: true, model: 'gpt-6.1-sol', modelProvider: 'openai', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+      .mockResolvedValue({ readOnly: false, model: 'gpt-6.1-sol', modelProvider: 'openai', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    const state = useDesktopState()
+    state.primeSelectedThread('original-recovery')
+    await expect(state.sendMessageToSelectedThread('keep my draft')).rejects.toMatchObject({ code: 'thread_writer_conflict' })
+    await expect(state.retryThreadWriter('original-recovery')).resolves.toBe(true)
+    expect(state.selectedThreadId.value).toBe('original-recovery')
+    expect(state.getPendingThreadDraft('original-recovery')?.text).toBe('keep my draft')
+    expect(state.error.value).toBe('')
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(gatewayMocks.forkThread).not.toHaveBeenCalled()
+    gatewayMocks.releaseIdleThreadWriter.mockResolvedValue(true)
+    state.primeSelectedThread('other-history')
+    await Promise.resolve()
+    expect(gatewayMocks.releaseIdleThreadWriter).toHaveBeenCalledWith('original-recovery')
+  })
+
   it('keeps history readable without attempting a turn or a model fallback, preserving the rejected draft', async () => {
     installTestWindow()
     gatewayMocks.resumeThread.mockResolvedValue({ readOnly: true, model: 'gpt-6.1-sol', modelProvider: 'openai',
@@ -104,7 +136,7 @@ describe('desktop writer conflict', () => {
     await expect(state.sendMessageToSelectedThread('continue this work', [], [], 'steer', files))
       .rejects.toMatchObject({ code: 'thread_writer_conflict' })
     expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
-    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
     expect(state.error.value).toContain('此条消息未发送')
     expect(state.getPendingThreadDraft('desktop-owned')).toMatchObject({ text: 'continue this work', fileAttachments: files })
   })
@@ -1050,7 +1082,7 @@ describe('provider model selection', () => {
       }
       return ['gpt-5.5', 'gpt-5.4-mini']
     })
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.4-mini',
       modelProvider: 'opencode_zen',
       messages: [],
@@ -1107,7 +1139,7 @@ describe('provider model selection', () => {
       }
       return ['gpt-5.5', 'gpt-5.4-mini']
     })
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.4-mini',
       modelProvider: 'opencode_zen',
       messages: [],
@@ -1293,7 +1325,7 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5', 'gpt-5.4-mini'])
-    gatewayMocks.resumeThread.mockRejectedValue(new Error('thread not found'))
+    gatewayMocks.getThreadDetail.mockRejectedValue(new Error('thread not found'))
 
     const state = useDesktopState()
     state.primeSelectedThread('missing-thread')
@@ -1308,7 +1340,8 @@ describe('provider model selection', () => {
 
     await state.ensureThreadMessagesLoaded('missing-thread', { silent: true })
     await state.loadMessages('missing-thread')
-    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
   })
 })
 

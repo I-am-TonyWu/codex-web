@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { buildAppServerArgs } from './appServerRuntimeConfig'
 
 describe('app-server runtime config', () => {
+  it('gracefully unloads an unsubscribed idle web writer immediately', () => {
+    const args = buildAppServerArgs()
+    const index = args.indexOf('thread_unload_delay_secs=0')
+    expect(index).toBeGreaterThan(0)
+    expect(args[index - 1]).toBe('-c')
+  })
   it('enables Codex memories by default for spawned app-server processes', () => {
     const args = buildAppServerArgs()
     const featureIndex = args.indexOf('features.memories=true')

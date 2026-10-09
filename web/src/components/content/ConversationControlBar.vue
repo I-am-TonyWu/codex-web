@@ -14,7 +14,8 @@
         <summary>交接说明</summary>
         <p>接管网页控制后，当前任务继续运行。旧网页只能查看；两端草稿不会自动发送。退出、断线或后台超过 30 秒后，其他网页可取得控制，任务继续。</p>
         <p>接管或服务重启后，原待发送队列暂停，请编辑后明确重新排队或手动发送。</p>
-        <p>网页控制权与本机写入锁是两层状态。“尚未取得网页控制权”不代表本机写入锁空闲。占用提示是上一次检查的结果；可重新检查或手动发送重试，草稿不会自动发出。桌面关闭聊天页面后后台可能仍持有锁，请通过客户端正常释放；桌面远程释放暂不可用。</p>
+        <p>网页控制权与本机写入锁是两层状态。桌面持有会话时，会尝试连接桌面的本机协同通道，在同一条对话发送、同步结果和审批；不需要先释放或另建分支。桌面通道不兼容或断开时保留草稿，重新检查不会自动发送。</p>
+        <p>协同模式保留网页的工作区沙箱和审批。桌面正在执行或等待审批时，请等待完成，或明确停止任务后再发送。改名、回滚和归档等操作仍可能需要在客户端完成。</p>
         <button disabled title="尚无经过验证的桌面原生会话控制接口">释放桌面会话（暂不可用）</button>
         <button :disabled="busy" @click="checkDelivery">核对发送结果</button>
         <button :disabled="busy" @click="clearUncertain">已核对历史，清除待确认标记</button>
@@ -38,7 +39,7 @@ const label = computed(() => {
   if (value.activity === 'external' && value.owner && !value.proof) return `其他${value.owner.label}控制 · 当前只读`
   if (value.activity === 'external') return '上次检测到本机后台占用 · 可重新检查或发送重试'
   const owner = value.proof ? '本网页控制' : value.owner ? `其他${value.owner.label}控制 · 当前只读` : '尚未取得网页控制权 · 发送时检查本机写入状态'
-  return owner + (value.activity === 'running' ? ' · 任务运行中' : value.activity === 'approval' ? ' · 等待审批' : '')
+  return owner + (value.executionSource === 'desktop' ? ' · 桌面后台协同' : '') + (value.activity === 'running' ? ' · 任务运行中' : value.activity === 'approval' ? ' · 等待审批' : '')
 })
 async function run(action: () => Promise<unknown>) {
   if (busy.value) return

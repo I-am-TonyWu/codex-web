@@ -4051,7 +4051,7 @@ export function useDesktopState() {
       clearLiveReasoningForThread(notificationThreadId)
     }
 
-    if (notification.method === 'web/thread/writerReleased' || notification.method === 'thread/closed') {
+    if (notification.method === 'web/thread/writerReleased' || notification.method === 'thread/closed' || notification.method === 'web/thread/desktopDetached' || notification.method === 'web/thread/desktopDisconnected') {
       resumedThreadById.value = omitKey(resumedThreadById.value, notificationThreadId)
     }
 

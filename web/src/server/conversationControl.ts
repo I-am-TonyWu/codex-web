@@ -7,7 +7,7 @@ export class ControlError extends Error {
 }
 export type ControlClient = { id: string; key: string; scope: string; label: string }
 export type ControlProof = { epoch: string; version: number; token: string }
-type Entry = { version: number; revision: number; owner: ControlClient | null; token: string; heartbeat: number; activity: string; turnId: string | null; transferring: boolean; completedTurnId: string | null }
+type Entry = { version: number; revision: number; owner: ControlClient | null; token: string; heartbeat: number; activity: string; turnId: string | null; transferring: boolean; completedTurnId: string | null; executionSource: 'web' | 'desktop' }
 type Receipt = { id: string; scope: string; threadId: string; hash: string; state: 'pending' | 'completed' | 'rejected'; result?: unknown; at: number }
 const reject = (message = '此对话的控制权已改变。请查看最新状态，并明确点击“接管此对话”。消息未发送。'): never => { throw new ControlError('control_conflict', message) }
 
@@ -38,7 +38,7 @@ export class ConversationControl {
     let entry = this.entries.get(threadId)
     if (!entry) {
       if (this.entries.size >= 4096) throw new ControlError('control_capacity', '会话控制容量已满，请重启网页服务。')
-      entry = { version: 0, revision: 0, owner: null, token: '', heartbeat: 0, activity: 'unknown', turnId: null, transferring: false, completedTurnId: null }
+      entry = { version: 0, revision: 0, owner: null, token: '', heartbeat: 0, activity: 'unknown', turnId: null, transferring: false, completedTurnId: null, executionSource: 'web' }
       this.entries.set(threadId, entry)
     }
     if (entry.owner && !entry.transferring && this.now() - entry.heartbeat >= this.leaseMs) {
@@ -49,7 +49,7 @@ export class ConversationControl {
   status(threadId: string, client: ControlClient) {
     const e = this.entry(threadId)
     return { threadId, epoch: this.epoch, version: e.version, revision: e.revision, owner: e.owner ? { id: e.owner.id, label: e.owner.label } : null,
-      activity: e.activity, turnId: e.turnId, transferring: e.transferring, desktopReleaseAvailable: false,
+      activity: e.activity, turnId: e.turnId, transferring: e.transferring, desktopReleaseAvailable: false, executionSource: e.executionSource,
       proof: e.owner?.id === client.id ? { epoch: this.epoch, version: e.version, token: e.token } : null }
   }
   serial<T>(threadId: string, action: () => Promise<T>): Promise<T> {
@@ -102,6 +102,10 @@ export class ConversationControl {
     e.activity = activity
     e.turnId = activity === 'idle' ? null : (activity === 'approval' || activity === 'running') && !turnId ? e.turnId : turnId
   }
+  executionSource(threadId: string, source: 'web' | 'desktop') {
+    const e = this.entry(threadId)
+    if (e.executionSource !== source) { e.executionSource = source; e.revision++ }
+  }
   private loadReceipts() {
     return this.ready ??= readFile(this.ledgerPath, 'utf8').then((text) => {
       for (const line of text.split('\n')) {
@@ -142,7 +146,8 @@ export class ConversationControl {
       let result: unknown
       try { result = await action() } catch (error) {
         // A transport timeout may have created a turn. Keep pending rather than declare rejection.
-        if (/already has an active writer|thread not found|invalid (?:params|argument)|unsupported/iu.test(String(error))) await this.persist({ ...receipt, state: 'rejected' })
+        const preflightRejected = error instanceof ControlError && ['desktop_thread_busy', 'desktop_bridge_unavailable', 'desktop_operation_unsupported'].includes(error.code)
+        if (preflightRejected || /already has an active writer|thread not found|invalid (?:params|argument)|unsupported/iu.test(String(error))) await this.persist({ ...receipt, state: 'rejected' })
         throw error
       }
       const turn = (result as { turn?: { id?: string; status?: string } })?.turn

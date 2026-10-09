@@ -12,6 +12,10 @@ export async function recheckThreadWriter(threadId: string, rpc: Rpc) {
   if (body?.webReadOnlyReason === 'thread_writer_conflict') return { activity: 'external', turnId: null }
   const thread = record(body?.thread)
   const status = record(thread?.status)?.type
+  if (body?.webExecutionSource === 'desktop') {
+    const turn = Array.isArray(thread?.turns) ? [...thread.turns].reverse().map(record).find(t => t?.status === 'inProgress') : null
+    return { activity: status === 'idle' || status === 'systemError' ? 'idle' : status === 'active' ? 'running' : 'unknown', turnId: typeof turn?.id === 'string' ? turn.id : null, executionSource: 'desktop' }
+  }
   if (status === 'idle' || status === 'systemError') {
     // Checking should not leave a new idle writer behind or transfer a desktop task.
     await rpc('codexui/thread/release', { threadId })

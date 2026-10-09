@@ -5,16 +5,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const base = process.env.WRITER_TEST_URL || 'http://127.0.0.1:4195';
 const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
+const desktopMode = process.env.WRITER_DESKTOP_BRIDGE === '1';
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: 'chrome' });
   let scenarios = 0;
   try {
     for (const colorScheme of ['light', 'dark']) for (const viewport of [
       { width: 375, height: 812 }, { width: 768, height: 1024 },
-    ]) for (const recovery of ['check', 'manual-send']) {
+    ]) for (const recovery of desktopMode ? ['check'] : ['check', 'manual-send']) {
       const page = await browser.newPage({ viewport, colorScheme });
       const errors = [], calls = [], writes = [], forks = [];
-      let writerLocked = true;
+      let writerLocked = !desktopMode;
       const controlState = { threadId: '11111111-1111-4111-8111-111111111111', epoch: 'fixture', version: 0, owner: null, proof: null, activity: 'idle', turnId: null, transferring: false, desktopReleaseAvailable: false };
       page.on('pageerror', error => errors.push(error.message));
       const original = '11111111-1111-4111-8111-111111111111';
@@ -34,7 +35,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
           if (pathname.endsWith('/register')) json = { data: { id: 'fixture', key: 'fixture-key' } };
           else {
             if (pathname.endsWith('/claim')) { controlState.version++; controlState.owner = { id: 'fixture', label: '手机网页' }; controlState.proof = { epoch: 'fixture', version: controlState.version, token: 'fixture-token' }; }
-            if (pathname.endsWith('/recheck')) { controlState.activity = writerLocked ? 'external' : 'idle'; controlState.revision = (controlState.revision || 0) + 1; }
+            if (pathname.endsWith('/recheck')) { controlState.activity = writerLocked ? 'external' : 'idle'; controlState.executionSource = desktopMode ? 'desktop' : 'web'; controlState.revision = (controlState.revision || 0) + 1; }
             if (pathname.endsWith('/release')) { controlState.owner = null; controlState.proof = null; controlState.version++; }
             json = { data: controlState };
           }
@@ -47,7 +48,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
           if (method === 'thread/list') result = { data: [thread], nextCursor: null };
           if (method === 'thread/resume') { controlState.activity = writerLocked ? 'external' : 'idle'; controlState.revision = (controlState.revision || 0) + 1; }
           if (method === 'thread/read' || method === 'thread/resume') result = { thread,
-            ...(method === 'thread/resume' && writerLocked ? { webReadOnlyReason: 'thread_writer_conflict' } : {}) };
+            ...(method === 'thread/resume' && writerLocked ? { webReadOnlyReason: 'thread_writer_conflict' } : {}), ...(desktopMode ? { webExecutionSource: 'desktop' } : {}) };
           if (method === 'model/list') result = { data: [{ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', displayName: 'GPT-6.1-sol',
             defaultReasoningEffort: 'high', supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'High' }] }] };
           if (method === 'config/read') result = { config: { model: 'gpt-6.1-sol', model_reasoning_effort: 'high' } };
@@ -63,6 +64,20 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       assert.equal(calls.filter(call => call.method === 'thread/resume').length, 0, 'browsing must not acquire a writer');
       const input = page.locator('textarea.thread-composer-input');
       const draft = '保留原对话，继续制作汇报页';
+      if (desktopMode) {
+        await input.fill(draft);
+        await page.getByRole('button', { name: '重新检查写入状态', exact: true }).click();
+        await page.getByText('本网页控制 · 桌面后台协同', { exact: true }).waitFor();
+        assert.equal(writes.length, 0, 'desktop connection checks never send the draft');
+        assert.equal(await input.inputValue(), draft);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        if (screenshotDir) { fs.mkdirSync(screenshotDir, { recursive: true }); await page.screenshot({ path: path.join(screenshotDir, `${colorScheme}-${viewport.width}-desktop-connected.png`), fullPage: true }); }
+        const sent = page.waitForResponse(r => r.url().endsWith('/codex-api/rpc') && r.request().postDataJSON()?.method === 'turn/start');
+        await input.press('Enter'); await sent;
+        await page.waitForFunction(() => !document.querySelector('textarea.thread-composer-input')?.value);
+        assert.equal(writes.length, 1); assert.equal(writes[0].threadId, original); assert.equal(forks.length, 0); assert.deepEqual(errors, []);
+        await page.close(); scenarios++; continue;
+      }
       await input.fill(draft); await input.press('Enter');
       const retry = page.getByRole('button', { name: '重试原对话', exact: true });
       await retry.waitFor();
@@ -102,7 +117,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       assert.deepEqual(errors, []);
       await page.close(); scenarios++;
     }
-    console.log(JSON.stringify({ passed: true, scenarios, realModelRequests: 0,
+    console.log(JSON.stringify({ passed: true, scenarios, desktopMode, realModelRequests: 0,
       checks: ['reader-only history', 'blocked send', 'blocked retry', 'same original ID', 'restored draft', 'no auto send or fork', 'manual original send'],
       viewports: ['375x812', '768x1024'], themes: ['light', 'dark'] }));
   } finally { await browser.close(); }

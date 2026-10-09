@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ConversationControl } from './conversationControl'
+import { ConversationControl, ControlError } from './conversationControl'
 let dir: string
 let now: number
 let control: ConversationControl
@@ -98,6 +98,12 @@ describe('browser control and executor handoff', () => {
     control.activity('t', 'idle', 'finished-turn')
     control.activity('t', 'running', 'finished-turn')
     expect(control.status('t', clients()[0]).activity).toBe('idle')
+  })
+  it.each(['desktop_thread_busy', 'desktop_bridge_unavailable', 'delivery_uncertain'])('records %s according to whether the request reached the executor', async code => {
+    const [a] = clients(); const s = control.status('t', a); const owned = await control.claim('t', a, s.epoch, 0, false)
+    const id = 'request-1234567890123456'
+    await expect(control.sendOnce('t', a, owned.proof, id, {}, async () => { throw new ControlError(code, 'test') })).rejects.toMatchObject({ code })
+    expect((await control.receipt(id, a))?.state).toBe(code === 'delivery_uncertain' ? 'pending' : 'rejected')
   })
   it('binds terminal credentials to the authentication session', () => {
     const [a] = clients()

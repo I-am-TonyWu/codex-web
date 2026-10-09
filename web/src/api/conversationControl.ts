@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 import { CodexApiError, extractErrorMessage } from './codexErrors'
 export type Proof = { epoch: string; version: number; token: string }
-export type ControlState = { threadId: string; epoch: string; version: number; revision?: number; owner: { id: string; label: string } | null; proof: Proof | null; activity: string; turnId: string | null; transferring: boolean; desktopReleaseAvailable: boolean }
+export type ControlState = { threadId: string; epoch: string; version: number; revision?: number; owner: { id: string; label: string } | null; proof: Proof | null; activity: string; turnId: string | null; transferring: boolean; desktopReleaseAvailable: boolean; executionSource?: 'web' | 'desktop' }
 type Client = { id: string; key: string }
 export const conversationStates = reactive<Record<string, ControlState>>({})
 export function applyControlState(state: ControlState) {

@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [Desktop coordination and retained writer](conversation-control-1439.md) |
 | [Browser control and handoff preview](16-conversation-control.md) |
 | [History loading through Cloudflare with a desktop writer](cloudflare-active-writer-history.md) |
 | [Pinned threads remain visible during background pagination](pinned-threads-remain-visible-during-background-pagination.md) |

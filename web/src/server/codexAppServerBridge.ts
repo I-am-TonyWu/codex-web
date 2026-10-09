@@ -15,6 +15,7 @@ import { handleAccountRoutes } from './accountRoutes.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
 import { recheckThreadWriter } from './threadWriterProbe.js'
+import { DesktopThreadBridge } from './desktopThreadBridge.js'
 import { ConversationControl, ControlError, type ControlProof, type ControlClient } from './conversationControl.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
@@ -5979,6 +5980,7 @@ class AppServerProcess {
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
   private readonly writerLifecycle = new ThreadWriterLifecycle()
+  private readonly desktopBridge = new DesktopThreadBridge(event => this.emitNotification(event))
 
 
   private getCodexCommand(): string {
@@ -6464,16 +6466,27 @@ class AppServerProcess {
     await this.ensureInitialized()
     const threadId = this.extractThreadIdFromParams(params)
     if (method === 'codexui/thread/release' && threadId) {
+      if (this.desktopBridge.has(threadId)) { this.desktopBridge.detach(threadId); return { released: false, desktopDetached: true } }
       return { released: await this.releaseIdleWriter(threadId) }
     }
     const operation = async () => {
       try {
-        return await this.call(method, params)
+        if (threadId && this.desktopBridge.has(threadId) && (method.startsWith('turn/') || ['thread/resume', 'thread/archive', 'thread/rollback'].includes(method))) {
+          return await this.desktopBridge.rpc(threadId, method, asRecord(params) ?? {})
+        }
+        const result = await this.call(method, params)
+        return method === 'thread/read' && threadId ? this.desktopBridge.mergeRead(threadId, result) : result
       } catch (error) {
+        if (method === 'thread/resume' && threadId && /already has an active writer/iu.test(String(error)) && await this.desktopBridge.attach(threadId)) {
+          return this.desktopBridge.snapshot(threadId)
+        }
         // An idle session may have been unloaded after its last turn. This
         // rejection occurs before a turn exists, so one resume is safe.
         if (method !== 'turn/start' || !threadId || !isThreadNotFoundError(error)) throw error
-        await this.call('thread/resume', { threadId })
+        try { await this.call('thread/resume', { threadId }) } catch (resumeError) {
+          if (/already has an active writer/iu.test(String(resumeError)) && await this.desktopBridge.attach(threadId)) return this.desktopBridge.rpc(threadId, method, asRecord(params) ?? {})
+          throw resumeError
+        }
         return this.call(method, params)
       }
     }
@@ -6484,6 +6497,7 @@ class AppServerProcess {
   }
 
   private async releaseIdleWriter(threadId: string): Promise<boolean> {
+    if (this.desktopBridge.has(threadId)) return false
     const process = this.process
     if (!process || this.stopping) return false
     const released = await this.writerLifecycle.releaseIdle(threadId, (method, params) => {
@@ -6513,6 +6527,11 @@ class AppServerProcess {
     if (typeof id !== 'number' || !Number.isInteger(id)) {
       throw new Error('Invalid response payload: "id" must be an integer')
     }
+    if (id < 0) {
+      if ('error' in body) throw new Error('Please select an explicit approval decision for the desktop request')
+      await this.desktopBridge.respond(id, body.result)
+      return
+    }
 
     const rawError = asRecord(body.error)
     if (rawError) {
@@ -6534,10 +6553,11 @@ class AppServerProcess {
   }
 
   listPendingServerRequests(): PendingServerRequest[] {
-    return Array.from(this.pendingServerRequests.values())
+    return [...this.pendingServerRequests.values(), ...this.desktopBridge.listPending()]
   }
 
   dispose(): void {
+    this.desktopBridge.close()
     if (!this.process) return
 
     const proc = this.process
@@ -6974,7 +6994,7 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'conversation-control-1.4.3.8'
+const SHARED_BRIDGE_VERSION = 'conversation-control-1.4.3.9'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -7004,6 +7024,14 @@ function getSharedBridgeState(): SharedBridgeState {
     if (notification.method === 'turn/completed') control.activity(threadId, 'idle', readNonEmptyString(asRecord(params?.turn)?.id))
     if (notification.method === 'server/request') control.activity(threadId, 'approval', readNonEmptyString(nested?.turnId))
     if (notification.method === 'thread/closed') control.activity(threadId, 'idle')
+    if (notification.method === 'web/thread/desktopUpdated') {
+      control.executionSource(threadId, 'desktop')
+      const status = readNonEmptyString(asRecord(params?.status)?.type)
+      const flags = asRecord(params?.status)?.activeFlags
+      control.activity(threadId, status === 'active' ? Array.isArray(flags) && flags.includes('waitingOnApproval') ? 'approval' : 'running' : status === 'idle' || status === 'systemError' ? 'idle' : 'unknown', readNonEmptyString(params?.turnId))
+    }
+    if (notification.method === 'web/thread/desktopDisconnected') { control.executionSource(threadId, 'web'); control.activity(threadId, 'unknown') }
+    if (notification.method === 'web/thread/desktopDetached') { control.executionSource(threadId, 'web'); control.activity(threadId, 'idle') }
   })
   const backendQueueProcessor = new BackendQueueProcessor(appServer, control)
   const created: SharedBridgeState = {
@@ -7654,6 +7682,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         if (req.method === 'POST' && route === 'recheck') {
           const data = await control.mutate(threadId, client, proofFor(req), async () => {
             const checked = await recheckThreadWriter(threadId, (method, params) => appServer.rpc(method, params))
+            control.executionSource(threadId, 'executionSource' in checked && checked.executionSource === 'desktop' ? 'desktop' : 'web')
             const previous = control.status(threadId, client)
             control.activity(threadId, checked.activity === 'running' && previous.activity === 'approval' ? 'approval' : checked.activity, checked.turnId)
             return control.status(threadId, client)
@@ -7704,6 +7733,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               const turn = asRecord(asRecord(result)?.turn)
               if (threadId && method === 'turn/start') control.activity(threadId, ['completed', 'failed', 'interrupted'].includes(readNonEmptyString(turn?.status)) ? 'idle' : 'running', readNonEmptyString(turn?.id))
               if (threadId && method === 'thread/resume') control.activity(threadId, asRecord(result)?.webReadOnlyReason === 'thread_writer_conflict' ? 'external' : ['active', 'inProgress', 'running'].includes(readNonEmptyString(asRecord(thread?.status)?.type)) ? 'running' : 'idle')
+              if (threadId && method === 'thread/resume') control.executionSource(threadId, asRecord(result)?.webExecutionSource === 'desktop' ? 'desktop' : 'web')
               if (method === 'thread/fork' && thread?.id && typeof thread.id === 'string') { await control.claim(thread.id, clientFor(req), control.epoch, 0, false); control.activity(thread.id, 'idle') }
               return result
             } catch (error) {

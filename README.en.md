@@ -6,7 +6,7 @@ A browser interface for the Codex environment running on your Windows computer, 
 
 Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91**. The first public release is **1.4.3.1**. This is an independent community project, not affiliated with OpenAI, GitHub, or Cloudflare. It does not mirror the ChatGPT website or forward subscription-based ChatGPT chats.
 
-Current stable version: **1.4.3.6**. Latest preview: **[1.4.3.8](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.8)** ([writer recovery fixes](docs/releases/1.4.3.8.md)). See the [release notes](docs/releases/1.4.3.6.md), [version history and switching guide](docs/RELEASES.md), and [all GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases).
+Current stable version: **1.4.3.6**. Latest preview: **[1.4.3.9](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.9)** ([desktop coordination for historical conversations](docs/releases/1.4.3.9.md)). See the [stable release notes](docs/releases/1.4.3.6.md), [version history and switching guide](docs/RELEASES.md), and [all GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases).
 
 ## Download and requirements
 

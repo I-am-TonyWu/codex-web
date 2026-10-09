@@ -4,6 +4,7 @@
 
 | 版本 / Version | 类型 / Channel | 内容 / Changes | 下载 / Download |
 |---|---|---|---|
+| 1.4.3.9 | 预览 / Pre-release | 桌面持有历史会话时通过本机协同通道发送、同步结果及审批 | [v1.4.3.9](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.9) |
 | 1.4.3.8 | 预览 / Pre-release | 修正占用状态缓存、原对话写入重查、手动发送重试 | [v1.4.3.8](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.8) |
 | 1.4.3.7 | 预览 / Pre-release | 网页终端控制、交接、旧请求拒绝、发送去重；桌面释放暂不可用 | [v1.4.3.7](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.7) |
 | 1.4.3.6 | 稳定 / Stable | 网关错误、原对话重试、闲置释放及主机沙箱修复说明 | [v1.4.3.6](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.6) |

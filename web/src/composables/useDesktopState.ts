@@ -1,3 +1,4 @@
+import { recheckWriterControl } from '../api/conversationControl'
 import type { ZenModelMetadata } from '../types/zenModels'
 import { computed, ref } from 'vue'
 import {
@@ -5147,9 +5148,10 @@ export function useDesktopState() {
 
   async function retryThreadWriter(threadId: string): Promise<boolean> {
     try {
-      const resumed = await resumeThread(threadId)
-      if (resumed.readOnly) throw new CodexApiError(THREAD_WRITER_CONFLICT_MESSAGE, { code: 'thread_writer_conflict', method: 'thread/resume' })
-      resumedThreadById.value = { ...resumedThreadById.value, [threadId]: true }
+      const checked = await recheckWriterControl(threadId)
+      if (checked.activity === 'external') throw new CodexApiError(THREAD_WRITER_CONFLICT_MESSAGE, { code: 'thread_writer_conflict', method: 'thread/resume' })
+      // The explicit check releases its own idle writer; the next send resumes again.
+      resumedThreadById.value = omitKey(resumedThreadById.value, threadId)
       setTurnErrorForThread(threadId, null)
       setTurnActivityForThread(threadId, null)
       error.value = ''

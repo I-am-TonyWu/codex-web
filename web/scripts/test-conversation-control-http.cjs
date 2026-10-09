@@ -81,6 +81,7 @@ async function client(base, label, cookie = '') {
     const reply = await a.rpc(method, { ...params, turnId: accepted.result.turn.id, name: 'late', numTurns: 1 });
     assert.equal(reply.error?.code, 'control_conflict', method);
   }
+  assert.equal((await a.op('recheck', { threadId: id })).status, 409, 'an old controller cannot probe/reacquire a native writer');
   assert.equal((await a.op('heartbeat', { threadId: id })).status, 409);
   assert.equal((await a.op('release', { threadId: id })).status, 409);
   const oldQueue = await fetch(base + '/codex-api/thread-queue-state', { method: 'PUT', headers: a.headers, body: JSON.stringify({ patch: { [id]: [] }, proofs: { [id]: a.proof } }) });

@@ -5,15 +5,16 @@
       <span>{{ label }}</span>
     </div>
     <div class="control-actions">
-      <button v-if="!state?.proof && state?.activity !== 'external'" :disabled="busy || !state" @click="takeover(false)">{{ state?.owner ? '接管此对话' : '取得控制权' }}</button>
+      <button v-if="!state?.proof" :disabled="busy || !state" @click="takeover(false)">{{ state?.owner ? '接管此对话' : '取得控制权' }}</button>
       <button v-if="state?.turnId && ['running', 'approval'].includes(state.activity)" :disabled="busy" @click="takeover(true)">停止任务并接管</button>
       <button v-if="state?.proof" :disabled="busy" @click="leave">退出控制</button>
-      <button :disabled="busy" @click="refresh">刷新状态</button>
+      <button :disabled="busy" @click="refresh">刷新网页控制</button>
+      <button :disabled="busy || retrying || Boolean(state?.owner && !state?.proof)" @click="emit('retry')">{{ retrying ? '正在检查…' : '重新检查写入状态' }}</button>
       <details>
         <summary>交接说明</summary>
         <p>接管网页控制后，当前任务继续运行。旧网页只能查看；两端草稿不会自动发送。退出、断线或后台超过 30 秒后，其他网页可取得控制，任务继续。</p>
         <p>接管或服务重启后，原待发送队列暂停，请编辑后明确重新排队或手动发送。</p>
-        <p>桌面远程释放暂不可用。桌面占用时，请在桌面结束任务并释放会话，再点“重试原对话”。本程序不会结束整个 Codex 进程。</p>
+        <p>网页控制权与本机写入锁是两层状态。“尚未取得网页控制权”不代表本机写入锁空闲。占用提示是上一次检查的结果；可重新检查或手动发送重试，草稿不会自动发出。桌面关闭聊天页面后后台可能仍持有锁，请通过客户端正常释放；桌面远程释放暂不可用。</p>
         <button disabled title="尚无经过验证的桌面原生会话控制接口">释放桌面会话（暂不可用）</button>
         <button :disabled="busy" @click="checkDelivery">核对发送结果</button>
         <button :disabled="busy" @click="clearUncertain">已核对历史，清除待确认标记</button>
@@ -25,8 +26,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { conversationStates, refreshControl, claimControl, releaseControl, heartbeatControl, checkPendingSend, clearPendingSend } from '../../api/conversationControl'
-const props = defineProps<{ threadId: string }>()
-const emit = defineEmits<{ acquired: [] }>()
+const props = defineProps<{ threadId: string; retrying?: boolean }>()
+const emit = defineEmits<{ acquired: []; retry: [] }>()
 const busy = ref(false)
 const notice = ref('')
 const state = computed(() => conversationStates[props.threadId])
@@ -34,8 +35,9 @@ const label = computed(() => {
   const value = state.value
   if (!value) return '正在确认会话控制状态…'
   if (value.transferring) return '正在交接，请稍候'
-  if (value.activity === 'external') return '桌面或其他后台占用 · 远程释放暂不可用'
-  const owner = value.proof ? '本网页控制' : value.owner ? `其他${value.owner.label}控制 · 当前只读` : '尚未接管 · 可查看历史'
+  if (value.activity === 'external' && value.owner && !value.proof) return `其他${value.owner.label}控制 · 当前只读`
+  if (value.activity === 'external') return '上次检测到本机后台占用 · 可重新检查或发送重试'
+  const owner = value.proof ? '本网页控制' : value.owner ? `其他${value.owner.label}控制 · 当前只读` : '尚未取得网页控制权 · 发送时检查本机写入状态'
   return owner + (value.activity === 'running' ? ' · 任务运行中' : value.activity === 'approval' ? ' · 等待审批' : '')
 })
 async function run(action: () => Promise<unknown>) {
@@ -83,7 +85,7 @@ onBeforeUnmount(() => { generation++; clearInterval(timer); if (conversationStat
 .control-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 button, summary { border: 1px solid rgb(128 128 128 / 30%); border-radius: 7px; padding: 5px 8px; color: inherit; background: transparent; cursor: pointer; font: inherit; }
 button:disabled { opacity: .5; cursor: default; } button:hover:enabled { background: rgb(128 128 128 / 12%); }
-details { min-width: 0; flex: 1; } summary { width: max-content; } details[open] { flex-basis: 100%; }
+details { min-width: 0; flex: 0 0 auto; max-width: 100%; } summary { width: max-content; } details[open] { flex-basis: 100%; }
 details p, .control-notice { line-height: 1.65; margin: 8px 0 0; overflow-wrap: anywhere; }
 details button { margin: 8px 6px 0 0; } .control-notice { color: inherit; }
 @media (max-width: 480px) { .control-bar { margin: 4px 10px 8px; padding: 8px 10px; } }

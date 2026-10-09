@@ -14,6 +14,7 @@ import { writeFile } from 'node:fs/promises'
 import { handleAccountRoutes } from './accountRoutes.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
+import { recheckThreadWriter } from './threadWriterProbe.js'
 import { ConversationControl, ControlError, type ControlProof, type ControlClient } from './conversationControl.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
@@ -6687,6 +6688,9 @@ export class BackendQueueProcessor {
   }
 
   private async canStartQueuedTurn(threadId: string): Promise<boolean> {
+    const origin = this.origins.get(threadId)
+    // A start acknowledgement can precede native metadata/cache updates.
+    if (this.control && origin && ['running', 'approval'].includes(this.control.status(threadId, origin.client).activity)) return false
     const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: false }))
     const thread = asRecord(response?.thread)
     if (!thread) return false
@@ -6970,7 +6974,7 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'conversation-control-1.4.3.7'
+const SHARED_BRIDGE_VERSION = 'conversation-control-1.4.3.8'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -7169,6 +7173,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       : null
     let responseBodyBytes = 0
     let rpcMethod: string | null = null
+    let rpcThreadId = ''
+    const rpcControlSnapshot = () => {
+      try { return rpcThreadId ? control.status(rpcThreadId, clientFor(req)) : undefined } catch { return undefined }
+    }
     const originalWrite = res.write.bind(res)
     const originalEnd = res.end.bind(res)
     res.write = ((chunk: unknown, encoding?: unknown, cb?: unknown) => {
@@ -7643,6 +7651,15 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             body?.stop === true ? () => stopAndWait(threadId, client) : undefined)
           setJson(res, 200, { data }); return
         }
+        if (req.method === 'POST' && route === 'recheck') {
+          const data = await control.mutate(threadId, client, proofFor(req), async () => {
+            const checked = await recheckThreadWriter(threadId, (method, params) => appServer.rpc(method, params))
+            const previous = control.status(threadId, client)
+            control.activity(threadId, checked.activity === 'running' && previous.activity === 'approval' ? 'approval' : checked.activity, checked.turnId)
+            return control.status(threadId, client)
+          })
+          setJson(res, 200, { data }); return
+        }
         if (req.method === 'POST' && route === 'heartbeat') { setJson(res, 200, { data: control.heartbeat(threadId, client, proofFor(req)) }); return }
         if (req.method === 'POST' && route === 'release') {
           setJson(res, 200, { data: await control.release(threadId, client, proofFor(req), () => appServer.rpc('codexui/thread/release', { threadId })) }); return
@@ -7657,6 +7674,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           requestBodyBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8')
         }
         rpcMethod = body?.method && typeof body.method === 'string' ? body.method : null
+        rpcThreadId = readNonEmptyString(asRecord(body?.params)?.threadId)
 
 	        if (!body || typeof body.method !== 'string' || body.method.length === 0) {
 	          setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
@@ -7760,7 +7778,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
         }
 
-        setJson(res, 200, { result })
+        setJson(res, 200, { result, control: rpcControlSnapshot() })
         return
       }
 
@@ -9397,7 +9415,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const code = error instanceof ControlError ? error.code : /already has an active writer/iu.test(message) ? 'thread_writer_conflict' : 'rpc_error'
         console.warn(`[codex-rpc] ${rpcMethod} rejected (${code})`)
         res.setHeader('Cache-Control', 'no-store')
-        setJson(res, 200, { error: { code, message } })
+        setJson(res, 200, { error: { code, message }, control: rpcControlSnapshot() })
       } else if (error instanceof ControlError) {
         setJson(res, 409, { error: { code: error.code, message } })
       } else {

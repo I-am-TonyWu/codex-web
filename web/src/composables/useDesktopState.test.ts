@@ -1,3 +1,5 @@
+const controlMocks = vi.hoisted(() => ({ recheckWriterControl: vi.fn() }))
+vi.mock('../api/conversationControl', () => controlMocks)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildWorkspaceRootsProjectOrderState,
@@ -84,6 +86,7 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  controlMocks.recheckWriterControl.mockResolvedValue({ activity: 'idle' })
   gatewayMocks.releaseIdleThreadWriter.mockResolvedValue(false)
   gatewayMocks.getThreadDetail.mockResolvedValue({ model: 'gpt-6.1-sol', modelProvider: 'openai', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
@@ -122,7 +125,8 @@ describe('desktop writer conflict', () => {
     gatewayMocks.releaseIdleThreadWriter.mockResolvedValue(true)
     state.primeSelectedThread('other-history')
     await Promise.resolve()
-    expect(gatewayMocks.releaseIdleThreadWriter).toHaveBeenCalledWith('original-recovery')
+    expect(gatewayMocks.releaseIdleThreadWriter).not.toHaveBeenCalled()
+    expect(controlMocks.recheckWriterControl).toHaveBeenCalledWith('original-recovery')
   })
 
   it('keeps history readable without attempting a turn or a model fallback, preserving the rejected draft', async () => {

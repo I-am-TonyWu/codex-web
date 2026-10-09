@@ -7,7 +7,7 @@ export class ControlError extends Error {
 }
 export type ControlClient = { id: string; key: string; scope: string; label: string }
 export type ControlProof = { epoch: string; version: number; token: string }
-type Entry = { version: number; owner: ControlClient | null; token: string; heartbeat: number; activity: string; turnId: string | null; transferring: boolean; completedTurnId: string | null }
+type Entry = { version: number; revision: number; owner: ControlClient | null; token: string; heartbeat: number; activity: string; turnId: string | null; transferring: boolean; completedTurnId: string | null }
 type Receipt = { id: string; scope: string; threadId: string; hash: string; state: 'pending' | 'completed' | 'rejected'; result?: unknown; at: number }
 const reject = (message = '此对话的控制权已改变。请查看最新状态，并明确点击“接管此对话”。消息未发送。'): never => { throw new ControlError('control_conflict', message) }
 
@@ -38,7 +38,7 @@ export class ConversationControl {
     let entry = this.entries.get(threadId)
     if (!entry) {
       if (this.entries.size >= 4096) throw new ControlError('control_capacity', '会话控制容量已满，请重启网页服务。')
-      entry = { version: 0, owner: null, token: '', heartbeat: 0, activity: 'unknown', turnId: null, transferring: false, completedTurnId: null }
+      entry = { version: 0, revision: 0, owner: null, token: '', heartbeat: 0, activity: 'unknown', turnId: null, transferring: false, completedTurnId: null }
       this.entries.set(threadId, entry)
     }
     if (entry.owner && !entry.transferring && this.now() - entry.heartbeat >= this.leaseMs) {
@@ -48,7 +48,7 @@ export class ConversationControl {
   }
   status(threadId: string, client: ControlClient) {
     const e = this.entry(threadId)
-    return { threadId, epoch: this.epoch, version: e.version, owner: e.owner ? { id: e.owner.id, label: e.owner.label } : null,
+    return { threadId, epoch: this.epoch, version: e.version, revision: e.revision, owner: e.owner ? { id: e.owner.id, label: e.owner.label } : null,
       activity: e.activity, turnId: e.turnId, transferring: e.transferring, desktopReleaseAvailable: false,
       proof: e.owner?.id === client.id ? { epoch: this.epoch, version: e.version, token: e.token } : null }
   }
@@ -66,8 +66,8 @@ export class ConversationControl {
       if (epoch !== this.epoch || version !== e.version) reject()
       if (e.owner && e.owner.id !== client.id && !takeover) reject()
       if (stop) {
-        e.transferring = true
-        try { await stop() } catch (error) { e.activity = 'unknown'; throw error } finally { e.transferring = false }
+        e.transferring = true; e.revision++
+        try { await stop() } catch (error) { e.activity = 'unknown'; throw error } finally { e.transferring = false; e.revision++ }
       }
       e.version++; e.owner = client; e.token = randomBytes(32).toString('hex'); e.heartbeat = this.now()
       return this.status(threadId, client)
@@ -98,6 +98,7 @@ export class ConversationControl {
     const e = this.entry(threadId)
     if (activity === 'running' && turnId && e.completedTurnId === turnId) return
     if (activity === 'idle' && turnId) e.completedTurnId = turnId
+    e.revision++
     e.activity = activity
     e.turnId = activity === 'idle' ? null : (activity === 'approval' || activity === 'running') && !turnId ? e.turnId : turnId
   }

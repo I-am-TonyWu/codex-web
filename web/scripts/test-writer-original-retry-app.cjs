@@ -11,7 +11,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
   try {
     for (const colorScheme of ['light', 'dark']) for (const viewport of [
       { width: 375, height: 812 }, { width: 768, height: 1024 },
-    ]) {
+    ]) for (const recovery of ['check', 'manual-send']) {
       const page = await browser.newPage({ viewport, colorScheme });
       const errors = [], calls = [], writes = [], forks = [];
       let writerLocked = true;
@@ -34,6 +34,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
           if (pathname.endsWith('/register')) json = { data: { id: 'fixture', key: 'fixture-key' } };
           else {
             if (pathname.endsWith('/claim')) { controlState.version++; controlState.owner = { id: 'fixture', label: '手机网页' }; controlState.proof = { epoch: 'fixture', version: controlState.version, token: 'fixture-token' }; }
+            if (pathname.endsWith('/recheck')) { controlState.activity = writerLocked ? 'external' : 'idle'; controlState.revision = (controlState.revision || 0) + 1; }
             if (pathname.endsWith('/release')) { controlState.owner = null; controlState.proof = null; controlState.version++; }
             json = { data: controlState };
           }
@@ -44,6 +45,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
           const { method, params } = route.request().postDataJSON(); calls.push({ method, params });
           let result = {};
           if (method === 'thread/list') result = { data: [thread], nextCursor: null };
+          if (method === 'thread/resume') { controlState.activity = writerLocked ? 'external' : 'idle'; controlState.revision = (controlState.revision || 0) + 1; }
           if (method === 'thread/read' || method === 'thread/resume') result = { thread,
             ...(method === 'thread/resume' && writerLocked ? { webReadOnlyReason: 'thread_writer_conflict' } : {}) };
           if (method === 'model/list') result = { data: [{ id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', displayName: 'GPT-6.1-sol',
@@ -51,7 +53,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
           if (method === 'config/read') result = { config: { model: 'gpt-6.1-sol', model_reasoning_effort: 'high' } };
           if (method === 'thread/fork') forks.push(params);
           if (method === 'turn/start') { writes.push(params); result = { turn: { id: 'synthetic-turn', status: 'inProgress', items: [] } }; }
-          json = { result };
+          json = { result, control: method === 'thread/resume' ? controlState : undefined };
         }
         await route.fulfill({ json });
       });
@@ -65,6 +67,7 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       const retry = page.getByRole('button', { name: '重试原对话', exact: true });
       await retry.waitFor();
       assert.equal(writes.length, 0);
+      assert.equal(await page.locator('.thread-composer-submit').isDisabled(), false, 'a past native conflict must permit a manual retry');
       await retry.click();
       await retry.waitFor({ state: 'visible' });
       await page.waitForFunction(() => ![...document.querySelectorAll('button')].some(b => b.textContent.includes('正在重新连接')));
@@ -74,17 +77,25 @@ const screenshotDir = process.env.WRITER_SCREENSHOT_DIR;
       if (screenshotDir) {
         fs.mkdirSync(screenshotDir, { recursive: true });
         await page.waitForTimeout(2200);
-        await page.screenshot({ path: path.join(screenshotDir, `${colorScheme}-${viewport.width}-conflict.png`), fullPage: true });
+        await page.screenshot({ path: path.join(screenshotDir, `${colorScheme}-${viewport.width}-${recovery}-conflict.png`), fullPage: true });
       }
       writerLocked = false;
-      await retry.click();
-      await page.waitForFunction(text => document.querySelector('textarea.thread-composer-input')?.value === text, draft);
-      await retry.waitFor({ state: 'hidden' });
+      if (recovery === 'check') {
+        await page.getByRole('button', { name: '重新检查写入状态', exact: true }).click();
+        await page.waitForFunction(text => document.querySelector('textarea.thread-composer-input')?.value === text, draft);
+        await retry.waitFor({ state: 'hidden' });
+        assert.equal(writes.length, 0, 'explicit probe never sends the draft');
+        assert.equal(await page.locator('.thread-composer-submit').isDisabled(), false, 'successful probe clears stale readonly immediately');
+      }
       assert.equal(new URL(page.url()).hash, '#/thread/' + original);
-      assert.equal(writes.length, 0, 'recovered draft waits for manual send');
       assert.equal(forks.length, 0);
-      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `${colorScheme}-${viewport.width}-recovered.png`), fullPage: true });
+      if (screenshotDir) {
+        await page.waitForTimeout(2200);
+        await page.screenshot({ path: path.join(screenshotDir, `${colorScheme}-${viewport.width}-${recovery}-recovered.png`), fullPage: true });
+      }
+      const sent = page.waitForResponse(r => r.url().endsWith('/codex-api/rpc') && r.request().postDataJSON()?.method === 'turn/start');
       await input.press('Enter');
+      await sent;
       await page.waitForFunction(() => !document.querySelector('textarea.thread-composer-input')?.value);
       assert.equal(writes.length, 1);
       assert.equal(writes[0].threadId, original);

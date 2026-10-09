@@ -752,7 +752,9 @@ const skillDropdownOptions = computed(() =>
 
 const controlReadOnly = computed(() => {
   const value = conversationStates[props.activeThreadId]
-  return Boolean(value && (value.transferring || (value.owner && !value.proof) || value.activity === 'external'))
+  // An external conflict is a past observation, not a permanent browser lock.
+  // Every manual send still validates the native writer before creating a turn.
+  return Boolean(value && (value.transferring || (value.owner && !value.proof)))
 })
 const canSubmit = computed(() => {
   if (props.disabled || controlReadOnly.value) return false
@@ -1220,7 +1222,7 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
 }
 
 function onInterrupt(): void {
-  if (controlReadOnly.value) return
+  if (controlReadOnly.value || conversationStates[props.activeThreadId]?.activity === 'external') return
   emit('interrupt')
 }
 

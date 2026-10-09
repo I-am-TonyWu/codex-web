@@ -1,9 +1,15 @@
 import { reactive } from 'vue'
 import { CodexApiError, extractErrorMessage } from './codexErrors'
 export type Proof = { epoch: string; version: number; token: string }
-export type ControlState = { threadId: string; epoch: string; version: number; owner: { id: string; label: string } | null; proof: Proof | null; activity: string; turnId: string | null; transferring: boolean; desktopReleaseAvailable: boolean }
+export type ControlState = { threadId: string; epoch: string; version: number; revision?: number; owner: { id: string; label: string } | null; proof: Proof | null; activity: string; turnId: string | null; transferring: boolean; desktopReleaseAvailable: boolean }
 type Client = { id: string; key: string }
 export const conversationStates = reactive<Record<string, ControlState>>({})
+export function applyControlState(state: ControlState) {
+  const previous = conversationStates[state.threadId]
+  if (previous?.epoch === state.epoch && (previous.version > state.version || (previous.version === state.version && (previous.revision ?? 0) > (state.revision ?? 0)))) return previous
+  conversationStates[state.threadId] = state
+  return state
+}
 let client: Client | null = null
 let registering: Promise<Client> | null = null
 const pendingKey = 'codex-web.pending-sends.v1'
@@ -30,13 +36,11 @@ async function operation(route: string, threadId: string, extra: Record<string, 
   const state = conversationStates[threadId]
   const headers = { 'Content-Type': 'application/json', ...await identityHeaders(), 'x-codex-control': JSON.stringify(state?.proof ?? null) }
   const result = await jsonResponse<ControlState>(await fetch('/codex-api/control/' + route, { method: 'POST', headers, keepalive: route === 'release', body: JSON.stringify({ threadId, ...extra }) }))
-  conversationStates[threadId] = result
-  return result
+  return applyControlState(result)
 }
 export async function refreshControl(threadId: string) {
   const state = await jsonResponse<ControlState>(await fetch('/codex-api/control/state?threadId=' + encodeURIComponent(threadId), { headers: await identityHeaders(), cache: 'no-store' }))
-  conversationStates[threadId] = state
-  return state
+  return applyControlState(state)
 }
 export async function claimControl(threadId: string, takeover = false, stop = false) {
   const state = conversationStates[threadId] ?? await refreshControl(threadId)
@@ -44,6 +48,10 @@ export async function claimControl(threadId: string, takeover = false, stop = fa
 }
 export async function heartbeatControl(threadId: string) { return operation('heartbeat', threadId) }
 export async function releaseControl(threadId: string) { return operation('release', threadId) }
+export async function recheckWriterControl(threadId: string) {
+  await mutationHeaders(threadId)
+  return operation('recheck', threadId)
+}
 export async function mutationHeaders(threadId: string, acquire = true) {
   let state = conversationStates[threadId] ?? await refreshControl(threadId)
   if (!state.owner && acquire) state = await claimControl(threadId)

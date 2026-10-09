@@ -77,11 +77,21 @@ async function rpc(base, method, params) {
   const readOnly = await rpc(second, 'thread/resume', { threadId: originalId });
   assert.equal(readOnly.result?.webReadOnlyReason, 'thread_writer_conflict', JSON.stringify(readOnly));
   assert.equal(readOnly.result.thread.id, originalId);
+  const identity2 = identities.get(second);
+  const h2 = { 'x-codex-client': identity2.id, 'x-codex-client-key': identity2.key };
+  const state2 = async () => (await (await fetch(second + '/codex-api/control/state?threadId=' + originalId, { headers: h2 })).json()).data;
+  const blockedCheck = await controlPost(second, 'recheck', { threadId: originalId }, (await state2()).proof);
+  assert.equal(blockedCheck.activity, 'external', 'real writer recheck remains blocked while the external process holds its idle writer');
+  assert.ok(Buffer.byteLength(JSON.stringify(blockedCheck)) < 1500, 'recheck returns only compact control metadata');
   const cannotReleaseOtherOwner = await rpc(second, 'codexui/thread/release', { threadId: originalId });
   assert.equal(cannotReleaseOtherOwner.result?.released, false);
   const handoffStartedAt = Date.now();
   const releasedOriginal = await rpc(first, 'codexui/thread/release', { threadId: originalId });
   assert.equal(releasedOriginal.result?.released, true, JSON.stringify(releasedOriginal));
+  const recoveredCheck = await controlPost(second, 'recheck', { threadId: originalId }, (await state2()).proof);
+  assert.equal(recoveredCheck.activity, 'idle', 'fresh check clears the sticky external conflict');
+  const afterCheck = await rpc(second, 'thread/read', { threadId: originalId, includeTurns: false });
+  assert.equal(afterCheck.result.thread.status.type, 'notLoaded', 'explicit check does not retain a new idle writer');
   const sameOriginal = await rpc(second, 'thread/resume', { threadId: originalId });
   assert.equal(sameOriginal.result?.thread?.id, originalId);
   assert.ok(!sameOriginal.result.webReadOnlyReason, JSON.stringify(sameOriginal));
@@ -110,7 +120,7 @@ async function rpc(base, method, params) {
   assert.equal(reclaimed.result?.thread?.id, originalId);
   assert.ok(!reclaimed.result?.webReadOnlyReason, JSON.stringify(reclaimed));
   console.log(JSON.stringify({ passed: true, isolatedHome: true, realModelRequests: 0, syntheticProviderRequests, originalHandoffMs,
-    scenarios: ['RPC rejection stays HTTP 200 JSON', 'desktop writer conflict stays readable', 'explicit fork acquires independent writer', 'other owner is never released', 'original ID survives handoff', 'completed turn automatically releases idle writer'] }));
+    scenarios: ['RPC rejection stays HTTP 200 JSON', 'desktop writer conflict stays readable', 'explicit fork acquires independent writer', 'other owner is never released', 'real external lock recheck', 'blocked cache cleared after release', 'compact probe releases its own idle writer', 'original ID survives handoff', 'completed turn automatically releases idle writer'] }));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   provider.close();
   for (const child of children) {

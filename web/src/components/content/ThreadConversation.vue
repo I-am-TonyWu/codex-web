@@ -1,6 +1,6 @@
 <template>
   <section v-mermaid class="conversation-root" @mermaid-resize="onPendingImageSettled" @contextmenu.capture="onConversationContextMenu">
-    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" @acquired="emit('controlAcquired')" />
+    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="emit('retryWriter', activeThreadId)" />
     <a v-if="cwd" class="conversation-files-link" :href="toBrowseUrl(cwd)" target="_blank" rel="noopener">查看 / 下载项目文件</a>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 

@@ -81,7 +81,7 @@ const screenshots = process.env.WRITER_SCREENSHOT_DIR;
    await b.getByText('任务已确认停止。草稿尚未发送。', { exact: true }).waitFor();
    assert.equal(writes.length, 1);
    await b.getByRole('button', { name: '退出控制', exact: true }).click();
-   await b.getByText('尚未接管 · 可查看历史', { exact: true }).waitFor();
+   await b.getByText('尚未取得网页控制权 · 发送时检查本机写入状态', { exact: true }).waitFor();
    assert.equal(writes.length, 1);
    assert.deepEqual(errors, []);
    await context.close(); scenarios++;

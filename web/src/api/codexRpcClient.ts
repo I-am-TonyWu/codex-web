@@ -1,4 +1,4 @@
-import { rpcControlHeaders, sendRequestId, clearPendingSend, mutationHeaders, refreshControl } from './conversationControl'
+import { rpcControlHeaders, sendRequestId, clearPendingSend, mutationHeaders, refreshControl, applyControlState, type ControlState } from './conversationControl'
 import type { RpcEnvelope, RpcMethodCatalog } from '../types/codex'
 import { CodexApiError, extractErrorMessage, isThreadWriterConflict, THREAD_WRITER_CONFLICT_MESSAGE } from './codexErrors'
 
@@ -77,6 +77,8 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
     )
   }
 
+  const control = asRecord(asRecord(payload)?.control)
+  if (threadId && control?.threadId === threadId && typeof control.epoch === 'string' && typeof control.version === 'number') applyControlState(control as ControlState)
   const rpcError = asRecord(payload)?.error
   if (rpcError !== undefined && rpcError !== null) {
     const detail = extractErrorMessage(payload, `RPC ${method} failed`)

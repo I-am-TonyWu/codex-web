@@ -163,7 +163,17 @@ async function fetchSkills(silent = false): Promise<void> {
   } finally {
     isRefreshingSkills = false
     isLoading.value = false
+    scheduleSkillRefresh()
   }
+}
+
+function scheduleSkillRefresh(): void {
+  if (!isMounted) return
+  window.clearTimeout(syncTimer)
+  syncTimer = window.setTimeout(() => {
+    if (document.hidden) scheduleSkillRefresh()
+    else void fetchSkills(true)
+  }, installedSkills.value.some(skill => skill.translationStatus === 'pending') ? 3000 : 30_000)
 }
 
 defineExpose({ refresh: fetchSkills })
@@ -263,9 +273,10 @@ const visibleSkillErrors = [
 ]
 
 let syncTimer: number | undefined
-onUnmounted(() => window.clearInterval(syncTimer))
+let isMounted = false
+onUnmounted(() => { isMounted = false; window.clearTimeout(syncTimer) })
 onMounted(() => {
-  syncTimer = window.setInterval(() => { if (!document.hidden) void fetchSkills(true) }, 30_000)
+  isMounted = true
   void fetchSkills()
 })
 

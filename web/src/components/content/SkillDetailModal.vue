@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerX from '../icons/IconTablerX.vue'
 
@@ -107,6 +107,7 @@ export type HubSkill = {
   path?: string
   enabled?: boolean
   installCountLabel?: string
+  translationStatus?: 'ready' | 'pending' | 'error'
 }
 
 const props = defineProps<{
@@ -129,6 +130,8 @@ const emit = defineEmits<{
 const localDescription = ref('')
 const readmeContent = ref('')
 const isLoadingReadme = ref(false)
+let readmeTimer: ReturnType<typeof setTimeout> | undefined
+let readmeRevision = 0
 const { t } = useUiLanguage()
 
 const effectiveEnabled = computed(() => props.skill.enabled ?? true)
@@ -166,6 +169,7 @@ function simpleMarkdown(md: string): string {
 
 async function fetchReadme(): Promise<void> {
   if (!props.skill.owner || !props.skill.name) return
+  const revision = ++readmeRevision
   isLoadingReadme.value = true
   localDescription.value = ''
   readmeContent.value = ''
@@ -175,23 +179,28 @@ async function fetchReadme(): Promise<void> {
     if (props.skill.path) params.set('path', props.skill.path)
     const resp = await fetch(`/codex-api/skills-hub/readme?${params}`)
     if (!resp.ok) return
-    const data = (await resp.json()) as { content?: string; description?: string }
+    const data = (await resp.json()) as { content?: string; description?: string; translationStatus?: string }
+    if (!props.visible || revision !== readmeRevision) return
     readmeContent.value = data.content ?? ''
     localDescription.value = data.description ?? ''
+    if (data.translationStatus === 'pending') readmeTimer = setTimeout(() => void fetchReadme(), 3000)
   } catch {
     // silently fail
   } finally {
-    isLoadingReadme.value = false
+    if (revision === readmeRevision) isLoadingReadme.value = false
   }
 }
 
-watch(() => props.visible, (v) => {
+watch(() => [props.visible, props.skill.path] as const, ([v]) => {
+  clearTimeout(readmeTimer)
+  readmeRevision += 1
   if (v) {
     localDescription.value = ''
     readmeContent.value = ''
     void fetchReadme()
   }
 })
+onUnmounted(() => { clearTimeout(readmeTimer); readmeRevision += 1 })
 
 function onInstall(): void {
   emit('install', props.skill)
@@ -274,7 +283,8 @@ function onBrowseFiles(): void {
 }
 
 .sdm-desc {
-  @apply m-0 text-sm text-zinc-600 leading-relaxed;
+  @apply m-0 text-sm text-zinc-600 leading-relaxed whitespace-pre-line;
+  overflow-wrap: anywhere;
 }
 
 .sdm-readme-loading {
@@ -283,6 +293,7 @@ function onBrowseFiles(): void {
 
 .sdm-readme {
   @apply text-xs text-zinc-700 leading-relaxed border-t border-zinc-100 pt-3;
+  overflow-wrap: anywhere;
 }
 
 .sdm-readme :deep(h2) {
@@ -322,7 +333,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-footer-actions {
-  @apply flex items-center gap-2;
+  @apply flex flex-wrap items-center gap-2;
 }
 
 .sdm-btn {

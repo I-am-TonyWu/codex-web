@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join, posix } from 'node:path'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
+import { getSkillPresentation, type translateSkillText } from './skillPresentation.js'
 
 type AppServerLike = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -14,6 +15,7 @@ type ReadJsonBody = (req: IncomingMessage) => Promise<unknown>
 type SkillRouteContext = {
   appServer: AppServerLike
   readJsonBody: ReadJsonBody
+  translateSkillText?: typeof translateSkillText
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -255,6 +257,7 @@ type SkillHubEntry = {
   path?: string
   enabled?: boolean
   installCountLabel?: string
+  translationStatus?: 'ready' | 'pending' | 'error'
 }
 
 async function runGitFetchWithRefLockRetry(repoDir: string, args: string[] = ['fetch', 'origin']): Promise<void> {
@@ -271,17 +274,13 @@ async function runGitFetchWithRefLockRetry(repoDir: string, args: string[] = ['f
   }
 }
 
-async function buildLocalHubEntry(info: InstalledSkillInfo): Promise<SkillHubEntry> {
-  let description = ''
-  if (info.path) {
-    try {
-      description = extractSkillDescriptionFromMarkdown(await readFile(info.path, 'utf8'))
-    } catch {}
-  }
+async function buildLocalHubEntry(info: InstalledSkillInfo, translate?: typeof translateSkillText): Promise<SkillHubEntry> {
+  const presentation = await readLocalSkillPresentation(info, translate)
   return {
     name: info.name,
     owner: 'local',
-    description,
+    description: presentation.description,
+    translationStatus: presentation.translationStatus,
     displayName: '',
     publishedAt: 0,
     avatarUrl: '',
@@ -514,7 +513,7 @@ function groupRpcSkillRecords<T extends RpcSkillRecord>(skills: T[]): T[] {
   }))
 }
 
-type InstalledSkillInfo = { name: string; path: string; enabled: boolean }
+type InstalledSkillInfo = { name: string; path: string; enabled: boolean; description?: string }
 
 function comparableSkillPath(value: string): string {
   const normalized = posix.normalize(value.replace(/\\/gu, '/')).replace(/\/$/u, '')
@@ -564,26 +563,48 @@ export async function collectInstalledSkillsMap(appServer: AppServerLike): Promi
       for (const [name, installed] of installedMap) {
         if (comparableSkillPath(installed.path) === comparableSkillPath(skill.path)) installedMap.delete(name)
       }
-      installedMap.set(skill.name, { name: skill.name, path: skill.path, enabled: skill.enabled !== false })
+      installedMap.set(skill.name, { name: skill.name, path: skill.path, enabled: skill.enabled !== false, description: skill.description })
     }
   }
   return installedMap
 }
 
 function extractSkillFrontmatterField(markdown: string, fieldName: string): string {
-  const lines = markdown.split(/\r?\n/)
+  const lines = markdown.replace(/^\uFEFF/u, '').split(/\r?\n/)
   if (lines[0]?.trim() !== '---') return ''
   const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === '---')
   if (closingIndex < 0) return ''
   const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  const match = lines.slice(1, closingIndex).find((line) => new RegExp(`^${escaped}\\s*:`, 'iu').test(line.trim()))
-  return match?.replace(new RegExp(`^${escaped}\\s*:\\s*`, 'iu'), '').replace(/^['"]|['"]$/gu, '').trim() ?? ''
+  const index = lines.findIndex((line, i) => i > 0 && i < closingIndex && new RegExp(`^${escaped}\\s*:`, 'iu').test(line))
+  if (index < 0) return ''
+  const value = lines[index]!.replace(new RegExp(`^${escaped}\\s*:\\s*`, 'iu'), '').trim()
+  if (/^[>|][+-]?\s*(?:#.*)?$/u.test(value)) {
+    const block: string[] = []
+    for (let i = index + 1; i < closingIndex; i += 1) {
+      const line = lines[i]!
+      if (line.trim() && !/^\s/u.test(line)) break
+      block.push(line.trim())
+    }
+    return block.join(value.startsWith('|') ? '\n' : ' ').trim()
+  }
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try { return JSON.parse(value) as string } catch { return value.slice(1, -1) }
+  }
+  return value.startsWith("'") && value.endsWith("'") ? value.slice(1, -1).replace(/''/gu, "'") : value
 }
 
-function extractSkillDescriptionFromMarkdown(markdown: string): string {
+export function extractSkillDescriptionFromMarkdown(markdown: string): string {
   const description = extractSkillFrontmatterField(markdown, 'description')
   if (description) return description
   return markdown.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith('#') && !line.startsWith('---')) ?? ''
+}
+
+async function readLocalSkillPresentation(info: InstalledSkillInfo, translate?: typeof translateSkillText) {
+  const markdown = await readFile(info.path, 'utf8')
+  return getSkillPresentation({
+    description: info.description || extractSkillDescriptionFromMarkdown(markdown),
+    content: markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, '').trim(),
+  }, translate)
 }
 
 export async function handleSkillsRoutes(
@@ -596,7 +617,7 @@ export async function handleSkillsRoutes(
   if (req.method === 'GET' && url.pathname === '/codex-api/skills-hub') {
     try {
       const installedMap = await collectInstalledSkillsMap(appServer)
-      const installed = await Promise.all([...installedMap.values()].map((info) => buildLocalHubEntry(info)))
+      const installed = await Promise.all([...installedMap.values()].map((info) => buildLocalHubEntry(info, context.translateSkillText)))
       installed.sort((a, b) => a.name.localeCompare(b.name))
       setJson(res, 200, { installed })
     } catch (error) {
@@ -633,14 +654,12 @@ export async function handleSkillsRoutes(
         return true
       }
       if (installed) {
-        const installedMap = await scanInstalledSkillsFromDisk()
-        const installedInfo = installedMap.get(name)
-        const localSkillPath = installedInfo?.path
-          || (skillPath ? (skillPath.endsWith('/SKILL.md') ? skillPath : `${skillPath}/SKILL.md`) : '')
-        if (localSkillPath) {
-          const content = await readFile(localSkillPath, 'utf8')
-          const description = extractSkillDescriptionFromMarkdown(content)
-          setJson(res, 200, { content, description, source: 'local' })
+        const installedMap = await collectInstalledSkillsMap(appServer)
+        const info = skillPath
+          ? [...installedMap.values()].find(item => comparableSkillPath(item.path) === comparableSkillPath(skillPath))
+          : installedMap.get(name)
+        if (info) {
+          setJson(res, 200, { ...await readLocalSkillPresentation(info, context.translateSkillText), source: 'local' })
           return true
         }
       }

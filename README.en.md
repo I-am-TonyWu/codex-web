@@ -10,7 +10,7 @@ Current stable version: **1.4.3.6**. Latest preview: **[1.4.4](https://github.co
 
 1.4.4 includes the cumulative changes from local builds 1.4.3.10–1.4.3.12: natural-language tool summaries, collapsed commands and process images, and persistent task status. The browser only connects to the host's existing login; manage Codex accounts in the Windows client. Quota is at the top of settings, Ctrl+Enter submission is supported, and Telegram has been removed.
 
-The source includes local revision **1.4.7**: installed plugins only, standalone personal skills with enable switches, and clearer application connection labels. It includes the desktop rendering compatibility, unified web permissions, image history, compact title, and font controls from previous revisions. It has not been published. See the [local revision notes](docs/CHANGELOG-1.4.7.md) and [Antigravity feasibility assessment](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md). Future custom versions use three components; the next version is 1.4.8.
+The source includes local revision **1.4.8**: complete multiline skill descriptions and automatic Chinese card and detail text, cached by source content for new or updated skills. It retains personal skill switches, installed plugin filtering, desktop compatibility, unified web permissions, image history, compact titles, and font controls. It has not been published. See the [local revision notes](docs/CHANGELOG-1.4.8.md) and [Antigravity feasibility assessment](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md). Future custom versions use three components; the next version is 1.4.9.
 
 ## Download and requirements
 

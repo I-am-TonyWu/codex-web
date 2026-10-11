@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { collectInstalledSkillsMap, isPersonalSkillPath } from './skillsRoutes'
+import { collectInstalledSkillsMap, extractSkillDescriptionFromMarkdown, isPersonalSkillPath } from './skillsRoutes'
 
 let home: string
 beforeEach(async () => {
@@ -12,6 +12,11 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }) })
 
 describe('personal skill directory', () => {
+  it('reads folded and literal descriptions instead of displaying YAML block markers', () => {
+    expect(extractSkillDescriptionFromMarkdown('---\nname: folded\ndescription: >\n  First sentence.\n  Second sentence.\nlicense: MIT\n---\n# Body')).toBe('First sentence. Second sentence.')
+    expect(extractSkillDescriptionFromMarkdown('\uFEFF---\r\nname: literal\r\ndescription: |-\r\n  First line.\r\n  Second line.\r\n---\r\n')).toBe('First line.\nSecond line.')
+    expect(extractSkillDescriptionFromMarkdown('---\nname: quoted\ndescription: "Use \\"quoted\\" text."\n---\n')).toBe('Use "quoted" text.')
+  })
   it('includes personal installs across Windows path separators and keeps system and plugin entries out', () => {
     const skill = join(home, 'skills', 'my-skill', 'SKILL.md')
     expect(isPersonalSkillPath(skill, 'user')).toBe(true)

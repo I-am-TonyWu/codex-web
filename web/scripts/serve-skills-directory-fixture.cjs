@@ -4,14 +4,24 @@ const path = require('node:path');
 const home = path.resolve(process.env.SKILLS_FIXTURE_HOME || 'output/skills-directory-fixture');
 fs.mkdirSync(home, { recursive: true });
 process.env.CODEX_HOME = home;
+const fixtureDescriptions = {
+ 'personal-drawio': '>\n  Read detailed diagrams and keep the complete description.\n  Show every sentence without truncation.',
+ 'disabled-skill': '|\n  Read every line of the imported skill.\n  Never drop the final sentence.',
+ 'failing-skill': 'Fail to translate this skill when offline.',
+};
 const configFile = path.join(home, 'enabled.json');
 if (!fs.existsSync(configFile)) fs.writeFileSync(configFile, JSON.stringify({ 'personal-drawio': true, 'disabled-skill': false, 'failing-skill': true }));
 const personal = ['personal-drawio', 'disabled-skill', 'failing-skill'].map(name => {
  const file = path.join(home, 'skills', name, 'SKILL.md'); fs.mkdirSync(path.dirname(file), { recursive: true });
- fs.writeFileSync(file, `---\nname: ${name}\ndescription: 个人技能说明，可以打开查看完整内容。\n---\n# ${name}\n`);
- return { name, path: file, scope: 'user', description: '个人安装的技能，可启用或停用。' };
+ fs.writeFileSync(file, `---\nname: ${name}\ndescription: ${fixtureDescriptions[name]}\n---\n# ${name}\n\n## Instructions\nRead the complete explanation before starting.\n\n\`\`\`sh\nreport --check\n\`\`\`\n`);
+ return { name, path: file, scope: 'user' };
 });
 const events = [];
+const translateSkillText = async source => {
+ events.push({ translation: true });
+ if (source.description.includes('offline')) throw new Error('Translation offline');
+ return { description: '检查完整的技能说明，正确处理多行描述。' + '保留全部句子、技术名称和操作边界，卡片说明应完整换行。'.repeat(4) + '这是最后一句说明。', content: '# 技能说明\n\n## 详细用法\n开始前阅读完整说明，保留所有操作步骤。\n\n```sh\nreport --check\n```\n\n这是全文的最后一句说明。' };
+};
 const writeJson = (res, body) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); };
 const skillsRpc = { rpc: async () => {
  const enabled = JSON.parse(fs.readFileSync(configFile, 'utf8'));
@@ -28,10 +38,19 @@ const skillsRpc = { rpc: async () => {
   vite.middlewares.use(async (req, res, next) => {
    const url = new URL(req.url, 'http://localhost');
    if (url.pathname === '/fixture-state') return writeJson(res, { enabled: JSON.parse(fs.readFileSync(configFile, 'utf8')), events });
+   if (url.pathname === '/fixture-install-personal' && req.method === 'POST') {
+    const name = 'new-personal-skill';
+    if (!personal.some(skill => skill.name === name)) {
+     const file = path.join(home, 'skills', name, 'SKILL.md'); fs.mkdirSync(path.dirname(file), {recursive:true});
+     fs.writeFileSync(file, `---\nname: ${name}\ndescription: >\n  Inspect a newly installed skill automatically.\n---\n# New skill\nRead all detailed instructions in this new skill.\n\n\`\`\`sh\nreport --check\n\`\`\`\n`);
+     personal.push({name,path:file,scope:'user'});
+    }
+    return writeJson(res,{ok:true});
+   }
    if (!url.pathname.startsWith('/codex-api/')) return next();
    events.push({ method: req.method, path: url.pathname });
    const readJsonBody = async () => { let body = ''; for await (const chunk of req) body += chunk; return JSON.parse(body || '{}'); };
-   if (await handler(req, res, url, { appServer: skillsRpc, readJsonBody })) return;
+   if (await handler(req, res, url, { appServer: skillsRpc, readJsonBody, translateSkillText })) return;
    if (url.pathname === '/codex-api/meta/methods') return writeJson(res, { data: ['plugin/list','plugin/read','plugin/install','plugin/uninstall','app/list','mcpServerStatus/list','skills/config/write'] });
    if (url.pathname === '/codex-api/extensions') return writeJson(res, { plugins: { marketplaces: [{ name: 'local', plugins: [
     { id: 'installed@local', name: 'installed', installed: true, enabled: true, interface: { displayName: '已安装插件' } },

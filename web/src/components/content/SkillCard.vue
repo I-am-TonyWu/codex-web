@@ -140,7 +140,7 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-top {
-  @apply flex items-start gap-2.5;
+  @apply flex flex-wrap items-start gap-2.5;
 }
 
 .skill-card-avatar {
@@ -152,7 +152,7 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-info {
-  @apply flex flex-col gap-0.5 min-w-0 flex-1;
+  @apply flex flex-col gap-0.5 min-w-[4rem] flex-1;
 }
 
 .skill-card-header {
@@ -184,7 +184,8 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-desc {
-  @apply m-0 text-[0.8125rem] text-zinc-600 line-clamp-2 border-0 bg-transparent p-0 text-left cursor-pointer;
+  @apply m-0 text-[0.8125rem] leading-relaxed whitespace-pre-line text-zinc-600 border-0 bg-transparent p-0 text-left cursor-pointer;
+  overflow-wrap: anywhere;
 }
 
 .skill-card-toggle {

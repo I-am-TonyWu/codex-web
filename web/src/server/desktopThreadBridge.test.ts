@@ -29,7 +29,7 @@ function setup() {
   open.push(bridge)
   return { bridge, ipc, emit }
 }
-afterEach(() => { for (const b of open.splice(0)) b.close(); vi.useRealTimers() })
+afterEach(() => { for (const b of open.splice(0)) b.close(); vi.useRealTimers(); vi.unstubAllEnvs() })
 
 describe('desktop coordination preserves the original writer', () => {
   it('keeps idle cleanup working after a reset and reconnect', async () => {
@@ -61,15 +61,21 @@ describe('desktop coordination preserves the original writer', () => {
     await bridge.rpc(threadId, 'thread/resume', {})
     expect(ipc.request).toHaveBeenCalledTimes(2)
   })
-  it('manual send goes once to the identified owner with workspace sandbox and on-request approval', async () => {
+  it('manual send goes once with the web permission defaults and desktop-compatible text', async () => {
     const { bridge, ipc } = setup(); await bridge.attach(threadId)
     const result: any = await bridge.rpc(threadId, 'turn/start', { threadId, input: [{ type: 'text', text: 'manual' }], model: 'test-model', effort: 'high', attachments: [{ path: 'C:\\test\\a.txt' }] })
     expect(result.turn.id).toBe('new')
     const call = ipc.request.mock.calls.at(-1)!
     expect(call[0]).toBe('thread-follower-start-turn'); expect(call[2]).toBe('desktop-owner')
-    expect(call[1].turnStart.request).toMatchObject({ threadId, model: 'test-model', effort: 'high', approvalPolicy: 'on-request', permissions: null, sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['C:\\test'], networkAccess: false } })
+    expect(call[1].turnStart.request).toMatchObject({ threadId, model: 'test-model', effort: 'high', approvalPolicy: 'never', permissions: null, sandboxPolicy: { type: 'dangerFullAccess' }, input: [{ type: 'text', text: 'manual', text_elements: [] }] })
     expect(call[1].turnStart.context).toMatchObject({ inheritThreadSettings: false, useAppServerPermissionDefault: false, attachments: [{ path: 'C:\\test\\a.txt' }] })
     expect(ipc.request.mock.calls.filter(c => c[0] === 'thread-follower-start-turn')).toHaveLength(1)
+  })
+  it('honors an explicitly restricted web service configuration instead of desktop defaults', async () => {
+    vi.stubEnv('CODEXUI_SANDBOX_MODE', 'workspace-write'); vi.stubEnv('CODEXUI_APPROVAL_POLICY', 'on-request')
+    const { bridge, ipc } = setup(); await bridge.attach(threadId)
+    await bridge.rpc(threadId, 'turn/start', { input: [{ type: 'text', text: 'manual' }], sandboxPolicy: { type: 'dangerFullAccess' }, approvalPolicy: 'never' })
+    expect(ipc.request.mock.calls.at(-1)![1].turnStart.request).toMatchObject({ approvalPolicy: 'on-request', sandboxPolicy: { type: 'workspaceWrite', writableRoots: ['C:\\test'], networkAccess: false } })
   })
   it.each(['task', 'approval', 'unconfirmed', 'queued', 'goal'])('blocks a second send while %s is pending', async kind => {
     const { bridge, ipc } = setup()

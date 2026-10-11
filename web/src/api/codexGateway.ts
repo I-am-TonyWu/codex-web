@@ -1888,7 +1888,7 @@ export async function startThreadTurn(
     const dedupedFileAttachments = allFileAttachments.filter((entry, index) =>
       allFileAttachments.findIndex((candidate) => candidate.fsPath === entry.fsPath) === index)
     const finalText = buildTextWithAttachments(text, dedupedFileAttachments)
-    const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
+    const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText, text_elements: [] }]
     for (const imageUrl of imageUrls) {
       const normalizedUrl = imageUrl.trim()
       if (!normalizedUrl) continue

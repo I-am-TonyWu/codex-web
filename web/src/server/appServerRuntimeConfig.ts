@@ -65,6 +65,17 @@ export function resolveAppServerRuntimeConfig(): AppServerRuntimeConfig {
   }
 }
 
+/** Apply the web service's policy on every turn, including resumed desktop threads. */
+export function buildWebTurnPermissionOverrides(cwd = '') {
+  const config = resolveAppServerRuntimeConfig()
+  const sandboxPolicy = config.sandboxMode === 'danger-full-access'
+    ? { type: 'dangerFullAccess' }
+    : config.sandboxMode === 'read-only'
+      ? { type: 'readOnly' }
+      : { type: 'workspaceWrite', writableRoots: cwd ? [cwd] : [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+  return { approvalPolicy: config.approvalPolicy, approvalsReviewer: 'user', permissions: null, sandboxPolicy }
+}
+
 export function buildAppServerArgs(): string[] {
   const config = resolveAppServerRuntimeConfig()
   return [

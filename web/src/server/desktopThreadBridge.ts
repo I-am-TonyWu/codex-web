@@ -1,6 +1,8 @@
 import { createConnection, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { ControlError } from './conversationControl.js'
+import { buildWebTurnPermissionOverrides } from './appServerRuntimeConfig.js'
+import { normalizeCodexTurnInput } from '../shared/codexTurnInput.js'
 
 type Row = Record<string, any>
 type Event = { method: string; params: unknown }
@@ -303,8 +305,7 @@ export class DesktopThreadBridge {
       if (attached.submission || state.threadRuntimeStatus?.type === 'active' || desktopTurns(state).some(t => t.status === 'inProgress') || state.requests?.length || state.unconfirmedTurnSubmissions?.length || state.queuedMessages?.length || state.threadGoal?.status === 'active') throw new ControlError('desktop_thread_busy', '此对话仍有任务、审批或待发送消息。请等待完成，或明确停止任务后再发送。')
       const cwd = typeof state.cwd === 'string' ? state.cwd : ''
       if (!cwd) throw new ControlError('desktop_bridge_unavailable', '桌面会话缺少工作目录，不能安全发送。')
-      const request = { ...params, clientUserMessageId: randomUUID(), approvalPolicy: 'on-request', approvalsReviewer: 'user', permissions: null,
-        sandboxPolicy: { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } }
+      const request = { ...params, input: normalizeCodexTurnInput(params.input), clientUserMessageId: randomUUID(), ...buildWebTurnPermissionOverrides(cwd) }
       attached.submission = { turnId: null, previousIds: desktopTurns(state).map(t => t.id) }
       const response = await this.ipc.request('thread-follower-start-turn', { conversationId: threadId, turnStart: { request,
         context: { inheritThreadSettings: false, useAppServerPermissionDefault: false, usePermissionSelection: false, attachments: params.attachments ?? [] } } }, attached.owner, 60_000)

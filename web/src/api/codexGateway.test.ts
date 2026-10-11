@@ -43,6 +43,7 @@ describe('startThreadTurn collaboration mode payloads', () => {
 
     expect(requests).toHaveLength(2)
     expect(requests[0].method).toBe('turn/start')
+    expect(requests[0].params.input).toEqual([{ type: 'text', text: 'make a plan', text_elements: [] }])
     expect(requests[0].params.collaborationMode).toEqual({
       mode: 'plan',
       settings: {

@@ -28,7 +28,8 @@ const ipc = net.createServer(socket => {
       else if (request.method === 'thread-follower-read-model-settings') result = { settings: { resumeState: 'resumed' } };
       else if (request.method === 'thread-follower-start-turn') {
         assert.equal(request.version, 2); assert.equal(request.targetClientId, 'owner'); const params = request.params.turnStart.request;
-        assert.equal(params.sandboxPolicy.type, 'workspaceWrite'); assert.equal(params.approvalPolicy, 'on-request');
+        assert.equal(params.sandboxPolicy.type, 'dangerFullAccess'); assert.equal(params.approvalPolicy, 'never');
+        assert.deepEqual(params.input[0].text_elements, []);
         sends++; result = { result: await ownerRpc('turn/start', params) };
       } else if (request.method === 'thread-follower-interrupt-turn') result = { ok: true, ...(await ownerRpc('turn/interrupt', { threadId: thread.id, turnId: request.params.expectedTurnId })) };
       else throw Error('unexpected method ' + request.method);
@@ -84,7 +85,7 @@ async function client(label) {
   const history = await b.rpc('thread/read', { threadId: thread.id, includeTurns: true }); assert.equal(history.result.thread.id, thread.id); assert.equal(history.result.thread.turns.length, 1);
   const nativeRead = await ownerRpc('thread/read', { threadId: thread.id, includeTurns: true }); assert.equal(nativeRead.thread.turns.length, 1);
   assert.equal(providerCalls, 1); assert.equal(sends, 1);
-  console.log(JSON.stringify({ passed: true, realModelRequests: 0, providerCalls, sends, checks: ['real external writer retained', 'native IPC resume same ID', 'workspace sandbox preserved', 'one request one real turn', 'late controller rejected', 'native completion and original history readable'] }));
+  console.log(JSON.stringify({ passed: true, realModelRequests: 0, providerCalls, sends, checks: ['real external writer retained', 'native IPC resume same ID', 'web full-access/no-approval defaults', 'desktop-compatible text_elements', 'one request one real turn', 'late controller rejected', 'native completion and original history readable'] }));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   for (const socket of sockets) socket.destroy(); ipc.close(); provider.close();
   for (const child of children) if (process.platform === 'win32' && child.pid) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else child.kill();

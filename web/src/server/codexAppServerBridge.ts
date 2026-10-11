@@ -12,7 +12,8 @@ import { createInterface } from 'node:readline'
 import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { isRemoteAccountMutation, remoteAccountReadParams, REMOTE_ACCOUNT_DISABLED_MESSAGE } from './remoteAccountPolicy.js'
-import { buildAppServerArgs } from './appServerRuntimeConfig.js'
+import { buildAppServerArgs, buildWebTurnPermissionOverrides } from './appServerRuntimeConfig.js'
+import { normalizeCodexTurnInput } from '../shared/codexTurnInput.js'
 import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
 import { recheckThreadWriter } from './threadWriterProbe.js'
 import { DesktopThreadBridge } from './desktopThreadBridge.js'
@@ -6344,6 +6345,11 @@ class AppServerProcess {
   }
 
   async rpc(method: string, params: unknown): Promise<unknown> {
+    if (method === 'turn/start' || method === 'turn/steer') {
+      const request = asRecord(params) ?? {}
+      params = { ...request, input: normalizeCodexTurnInput(request.input),
+        ...(method === 'turn/start' ? buildWebTurnPermissionOverrides(typeof request.cwd === 'string' ? request.cwd : '') : {}) }
+    }
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
     if (this.hostAuthError && (method === 'account/rateLimits/read' || method === 'account/read')) {
@@ -6707,6 +6713,7 @@ export class BackendQueueProcessor {
     const input: Array<Record<string, unknown>> = [{
       type: 'text',
       text: buildTextWithAttachments(turn.message.text, dedupedFileAttachments),
+      text_elements: [],
     }]
 
     for (const imageUrl of turn.message.imageUrls) {

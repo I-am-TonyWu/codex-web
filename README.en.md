@@ -10,7 +10,7 @@ Current stable version: **1.4.3.6**. Latest preview: **[1.4.4](https://github.co
 
 1.4.4 includes the cumulative changes from local builds 1.4.3.10–1.4.3.12: natural-language tool summaries, collapsed commands and process images, and persistent task status. The browser only connects to the host's existing login; manage Codex accounts in the Windows client. Quota is at the top of settings, Ctrl+Enter submission is supported, and Telegram has been removed.
 
-The source includes local revision **1.4.5**: consistent desktop/web image attachments, a compact bold title, shared header/sidebar chat menus, Chinese menu labels, and adjustable font size. It includes the Codex-only connection and collapsed controls from 1.4.4.1. It has not been published. See the [local revision notes](docs/CHANGELOG-1.4.5.md) and [Antigravity feasibility assessment](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md). Future custom versions use three components; the next version is 1.4.6.
+The source includes local revision **1.4.6**: fixes a desktop rendering error caused by web text input and applies the same full-access/no-approval defaults to web-owned and desktop-coordinated turns. It includes the image history, compact title, Chinese menus, font size controls, and Codex-only connection from previous local revisions. It has not been published. See the [local revision notes](docs/CHANGELOG-1.4.6.md) and [Antigravity feasibility assessment](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md). Future custom versions use three components; the next version is 1.4.7.
 
 ## Download and requirements
 

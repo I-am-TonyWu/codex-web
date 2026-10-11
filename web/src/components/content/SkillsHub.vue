@@ -2,74 +2,38 @@
   <div class="skills-hub">
     <div class="skills-hub-header">
       <h2 class="skills-hub-title">{{ t('Skills Hub') }}</h2>
-      <p class="skills-hub-subtitle">{{ t('Manage installed skills on this machine') }}</p>
+      <p class="skills-hub-subtitle">{{ t('Manage your personally installed skills') }}</p>
     </div>
 
     <div v-if="toast" class="skills-hub-toast" :class="toastClass">{{ toast.text }}</div>
 
-    <div class="skills-search-panel">
-      <div class="skills-search-header">
-        <div class="skills-search-copy">
-          <strong>{{ t('Find skills') }}</strong>
-          <span>{{ t('Search the Skills registry with npx skills find.') }}</span>
-        </div>
-        <a
-          class="skills-directory-link"
-          href="https://skills.anyclaw.store/"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {{ t('Skills directory') }}
-        </a>
-      </div>
-      <form class="skills-search-form" @submit.prevent="searchSkills">
+    <div class="skills-search-form">
         <input
           v-model="skillSearchQuery"
           class="skills-search-input"
           type="search"
-          :placeholder="t('Search skills...')"
-          aria-label="Search skills"
+          :placeholder="t('Search personal skills...')"
+          :aria-label="t('Search personal skills...')"
         />
-        <button class="skills-hub-sort" type="submit" :disabled="isSearchingSkills || skillSearchQuery.trim().length < 2">
-          {{ isSearchingSkills ? t('Searching...') : t('Search') }}
-        </button>
-      </form>
-      <div v-if="skillSearchError" class="skills-hub-error">
-        <span>{{ skillSearchError }}</span>
-        <a class="skills-error-feedback" :href="feedbackMailto" @click="prepareSkillsErrorFeedback($event, skillSearchError)">{{ t('Send feedback') }}</a>
-      </div>
-    </div>
-
-    <div v-if="skillSearchResults.length > 0" class="skills-hub-section">
-      <button class="skills-hub-section-toggle" type="button" @click="isSearchResultsOpen = !isSearchResultsOpen">
-        <span class="skills-hub-section-title">{{ t('Search results ({count})', { count: skillSearchResults.length }) }}</span>
-        <IconTablerChevronRight class="skills-hub-section-chevron" :class="{ 'is-open': isSearchResultsOpen }" />
-      </button>
-      <div v-if="isSearchResultsOpen" class="skills-hub-grid">
-        <SkillCard
-          v-for="skill in skillSearchResults"
-          :key="skill.source || `${skill.owner}/${skill.name}`"
-          :skill="skill"
-          :show-browse-action="false"
-          @select="(skill) => openDetail(skill as HubSkill)"
-        />
-      </div>
     </div>
 
     <slot name="before-installed" />
 
     <div v-if="filteredInstalled.length > 0" class="skills-hub-section">
       <button class="skills-hub-section-toggle" type="button" @click="isInstalledOpen = !isInstalledOpen">
-        <span class="skills-hub-section-title">{{ t('Installed skills ({count})', { count: filteredInstalled.length }) }}</span>
+        <span class="skills-hub-section-title">{{ t('Personal skills ({count})', { count: filteredInstalled.length }) }}</span>
         <IconTablerChevronRight class="skills-hub-section-chevron" :class="{ 'is-open': isInstalledOpen }" />
       </button>
       <div v-if="isInstalledOpen" class="skills-hub-grid">
         <SkillCard
           v-for="skill in filteredInstalled"
-          :key="skill.name"
+          :key="skill.path || skill.name"
           :skill="skill"
-          :show-status-badge="false"
+          :show-status-badge="skill.enabled === false"
           :show-owner="false"
+          :show-toggle="true"
+          :is-toggling="togglingPaths.has(skill.path || '')"
+          @toggle-enabled="(skill, enabled) => handleToggleEnabled(skill as HubSkill, enabled)"
           @select="(skill) => openDetail(skill as HubSkill)"
         />
       </div>
@@ -81,7 +45,8 @@
         <span>{{ error }}</span>
         <a class="skills-error-feedback" :href="feedbackMailto" @click="prepareSkillsErrorFeedback($event, error)">{{ t('Send feedback') }}</a>
       </div>
-      <div v-else-if="installedSkills.length === 0" class="skills-hub-empty">{{ t('No installed skills found.') }}</div>
+      <div v-else-if="installedSkills.length === 0" class="skills-hub-empty">{{ t('No personal skills installed.') }}</div>
+      <div v-else-if="filteredInstalled.length === 0" class="skills-hub-empty">{{ t('No matching skills found.') }}</div>
     </div>
 
     <SkillDetailModal
@@ -89,6 +54,7 @@
       :visible="isDetailOpen"
       :is-installing="isDetailInstalling"
       :is-uninstalling="isDetailUninstalling"
+      :is-toggling="togglingPaths.has(detailSkill.path || '')"
       :is-trying="props.tryInFlightKey === skillTryKey(detailSkill)"
       @close="isDetailOpen = false"
       @install="handleInstall"
@@ -106,26 +72,23 @@ import SkillCard from './SkillCard.vue'
 import SkillDetailModal, { type HubSkill } from './SkillDetailModal.vue'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useUiLanguage } from '../../composables/useUiLanguage'
+import { setSkillEnabled } from '../../api/codexGateway'
 
 const EMPTY_SKILL: HubSkill = { name: '', owner: '', description: '', url: '', installed: false }
 type SkillsHubPayload = { installed?: HubSkill[] }
-type SkillsSearchPayload = { results?: HubSkill[]; error?: string }
 
 const installedSkills = ref<HubSkill[]>([])
-const skillSearchResults = ref<HubSkill[]>([])
 const isLoading = ref(false)
-const isSearchingSkills = ref(false)
 const error = ref('')
 const skillSearchQuery = ref('')
-const skillSearchError = ref('')
 const isInstalledOpen = ref(true)
-const isSearchResultsOpen = ref(true)
 const isDetailOpen = ref(false)
 const detailSkill = ref<HubSkill>(EMPTY_SKILL)
 const toast = ref<{ text: string; type: 'success' | 'error' } | null>(null)
 const actionSkillKey = ref('')
 const isInstallActionInFlight = ref(false)
 const isUninstallActionInFlight = ref(false)
+const togglingPaths = ref(new Set<string>())
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 const { t } = useUiLanguage()
 const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
@@ -148,7 +111,10 @@ const isDetailInstalling = computed(() =>
 const isDetailUninstalling = computed(() =>
   isUninstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value,
 )
-const filteredInstalled = computed(() => installedSkills.value)
+const filteredInstalled = computed(() => {
+  const query = skillSearchQuery.value.trim().toLowerCase()
+  return installedSkills.value.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(query))
+})
 
 function showToast(text: string, type: 'success' | 'error' = 'success'): void {
   toast.value = { text, type }
@@ -166,22 +132,8 @@ function prepareSkillsErrorFeedback(event: MouseEvent, message: string): void {
 
 function applySkillsPayload(payload: SkillsHubPayload): void {
   installedSkills.value = payload.installed ?? []
-  if (skillSearchResults.value.length > 0) {
-    const installedByName = new Map(installedSkills.value.map((skill) => [skill.name, skill]))
-    skillSearchResults.value = skillSearchResults.value.map((skill) => {
-      const installed = installedByName.get(skill.name)
-      return installed ? registrySearchSkillWithLocalState(skill, installed) : skill
-    })
-  }
-}
-
-function registrySearchSkillWithLocalState(registrySkill: HubSkill, installed: HubSkill): HubSkill {
-  return {
-    ...registrySkill,
-    installed: true,
-    path: installed.path,
-    enabled: installed.enabled,
-  }
+  const current = installedSkills.value.find(item => item.path === detailSkill.value.path)
+  if (current) detailSkill.value = { ...detailSkill.value, ...current }
 }
 
 function localSearchSkill(installed: HubSkill, registrySkill: HubSkill): HubSkill {
@@ -194,16 +146,18 @@ function localSearchSkill(installed: HubSkill, registrySkill: HubSkill): HubSkil
 }
 
 let isRefreshingSkills = false
+let skillsRevision = 0
 async function fetchSkills(silent = false): Promise<void> {
   if (isRefreshingSkills) return
   isRefreshingSkills = true
+  const revision = skillsRevision
   if (!silent) isLoading.value = true
   error.value = ''
   try {
     const resp = await fetch('/codex-api/skills-hub')
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const data = (await resp.json()) as SkillsHubPayload
-    applySkillsPayload(data)
+    if (revision === skillsRevision) applySkillsPayload(data)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load skills'
   } finally {
@@ -212,36 +166,12 @@ async function fetchSkills(silent = false): Promise<void> {
   }
 }
 
+defineExpose({ refresh: fetchSkills })
+
 function openDetail(skill: HubSkill): void {
   const installedSkill = skill.installed ? installedSkills.value.find((candidate) => candidate.name === skill.name) : undefined
   detailSkill.value = installedSkill ? localSearchSkill(installedSkill, skill) : skill
   isDetailOpen.value = true
-}
-
-async function searchSkills(): Promise<void> {
-  const query = skillSearchQuery.value.trim()
-  if (query.length < 2) return
-  isSearchingSkills.value = true
-  skillSearchError.value = ''
-  try {
-    const params = new URLSearchParams({ q: query })
-    const resp = await fetch(`/codex-api/skills-hub/search?${params}`)
-    const data = (await resp.json()) as SkillsSearchPayload
-    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`)
-    const installedByName = new Map(installedSkills.value.map((skill) => [skill.name, skill]))
-    skillSearchResults.value = (data.results ?? []).map((skill) => {
-      const installed = installedByName.get(skill.name)
-      return installed ? registrySearchSkillWithLocalState(skill, installed) : skill
-    })
-    isSearchResultsOpen.value = true
-    if (skillSearchResults.value.length === 0) {
-      showToast(t('No matching skills found.'), 'error')
-    }
-  } catch (e) {
-    skillSearchError.value = e instanceof Error ? e.message : 'Failed to search skills'
-  } finally {
-    isSearchingSkills.value = false
-  }
 }
 
 async function handleInstall(skill: HubSkill): Promise<void> {
@@ -295,17 +225,20 @@ async function handleUninstall(skill: HubSkill): Promise<void> {
 }
 
 async function handleToggleEnabled(skill: HubSkill, enabled: boolean): Promise<void> {
+  const path = skill.path
+  if (!path || togglingPaths.value.has(path)) return
+  togglingPaths.value.add(path)
   try {
-    const resp = await fetch('/codex-api/rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: 'skills/config/write', params: { path: skill.path, enabled } }),
-    })
-    if (!resp.ok) throw new Error('Failed to update skill')
-    showToast(`${skill.displayName || skill.name} skill ${enabled ? 'enabled' : 'disabled'}`)
-    await fetchSkills()
+    await setSkillEnabled(path, enabled)
+    skillsRevision += 1
+    installedSkills.value = installedSkills.value.map(item => item.path === path ? { ...item, enabled } : item)
+    if (detailSkill.value.path === path) detailSkill.value = { ...detailSkill.value, enabled }
+    showToast(t(enabled ? '{name} enabled' : '{name} disabled', { name: skill.displayName || skill.name }))
+    emit('skills-changed')
   } catch (e) {
     showToast(e instanceof Error ? e.message : 'Failed to update skill', 'error')
+  } finally {
+    togglingPaths.value.delete(path)
   }
 }
 
@@ -326,7 +259,6 @@ function skillTryKey(skill: HubSkill): string {
 }
 
 const visibleSkillErrors = [
-  skillSearchError,
   error,
 ]
 

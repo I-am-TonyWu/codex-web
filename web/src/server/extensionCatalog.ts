@@ -11,6 +11,10 @@ export class ExtensionCatalog {
 
   constructor(private server: Rpc) {}
 
+  invalidate(): void {
+    this.snapshots.clear()
+  }
+
   async read(cwd?: string): Promise<Snapshot> {
     if (!this.remote && Date.now() >= this.nextRemoteAt) {
       this.nextRemoteAt = Date.now() + 90_000

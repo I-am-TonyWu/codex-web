@@ -3,6 +3,16 @@ import { ExtensionCatalog } from './extensionCatalog'
 
 afterEach(() => vi.useRealTimers())
 describe('desktop extension synchronization', () => {
+  it('immediately reloads skill enablement after a successful config write invalidates cached snapshots', async () => {
+    let enabled = true
+    const rpc = vi.fn(async (method: string) => method === 'skills/list' ? [{ enabled }] : { marketplaces: [] })
+    const catalog = new ExtensionCatalog({ rpc })
+    await catalog.read()
+    await catalog.read()
+    enabled = false
+    catalog.invalidate()
+    expect((await catalog.read()).skills).toEqual([{ enabled: false }])
+  })
   it('serves local skills while remote sync is pending, coalesces reads, and reloads after sync', async () => {
     let finish!: () => void
     let installed = ['system']

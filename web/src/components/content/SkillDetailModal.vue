@@ -71,7 +71,7 @@
               :disabled="isActing || props.isTrying"
               @click="onTry"
             >
-              {{ props.isTrying ? 'Starting...' : 'Try it!' }}
+              {{ t(props.isTrying ? 'Starting...' : 'Try it!') }}
             </button>
 
             <button
@@ -114,6 +114,7 @@ const props = defineProps<{
   visible: boolean
   isInstalling?: boolean
   isUninstalling?: boolean
+  isToggling?: boolean
   isTrying?: boolean
 }>()
 
@@ -125,19 +126,18 @@ const emit = defineEmits<{
   try: [skill: HubSkill]
 }>()
 
-const localEnabled = ref<boolean | null>(null)
 const localDescription = ref('')
 const readmeContent = ref('')
 const isLoadingReadme = ref(false)
 const { t } = useUiLanguage()
 
-const effectiveEnabled = computed(() => localEnabled.value ?? props.skill.enabled ?? true)
-const isActing = computed(() => (props.isInstalling === true) || (props.isUninstalling === true))
+const effectiveEnabled = computed(() => props.skill.enabled ?? true)
+const isActing = computed(() => props.isInstalling === true || props.isUninstalling === true || props.isToggling === true)
 const effectiveDescription = computed(() => localDescription.value || props.skill.description)
 const skillDirPath = computed(() => {
   const p = props.skill.path
   if (!p) return ''
-  return p.endsWith('/SKILL.md') ? p.slice(0, -'/SKILL.md'.length) : p
+  return p.replace(/\\/gu, '/').replace(/\/SKILL\.md$/iu, '')
 })
 
 const renderedReadme = computed(() => {
@@ -187,7 +187,6 @@ async function fetchReadme(): Promise<void> {
 
 watch(() => props.visible, (v) => {
   if (v) {
-    localEnabled.value = null
     localDescription.value = ''
     readmeContent.value = ''
     void fetchReadme()
@@ -204,7 +203,6 @@ function onUninstall(): void {
 
 function onToggleEnabled(): void {
   const next = !effectiveEnabled.value
-  localEnabled.value = next
   emit('toggle-enabled', props.skill, next)
 }
 

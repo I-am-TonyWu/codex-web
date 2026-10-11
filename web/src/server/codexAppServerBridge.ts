@@ -7360,6 +7360,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const run = async () => {
             try {
               const result = await callRpcWithArchiveRecovery(appServer, method, body.params ?? null)
+              if (method === 'skills/config/write') extensions.invalidate()
               const thread = asRecord(asRecord(result)?.thread)
               const turn = asRecord(asRecord(result)?.turn)
               if (threadId && method === 'turn/start') control.activity(threadId, ['completed', 'failed', 'interrupted'].includes(readNonEmptyString(turn?.status)) ? 'idle' : 'running', readNonEmptyString(turn?.id))

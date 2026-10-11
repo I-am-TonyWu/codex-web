@@ -1,9 +1,7 @@
 <template>
-  <button
+  <article
     class="skill-card"
-    type="button"
     :class="{ 'is-disabled': skill.installed && skill.enabled === false }"
-    @click="$emit('select', skill)"
   >
     <div class="skill-card-top">
       <img
@@ -17,7 +15,7 @@
       <div class="skill-card-avatar-fallback" v-else>{{ skill.owner.charAt(0) }}</div>
       <div class="skill-card-info">
         <div class="skill-card-header">
-          <span class="skill-card-name">{{ skill.displayName || skill.name }}</span>
+          <button class="skill-card-name" type="button" :title="skill.displayName || skill.name" @click="$emit('select', skill)">{{ skill.displayName || skill.name }}</button>
           <template v-if="showStatusBadge">
             <span v-if="skill.installed && skill.enabled === false" class="skill-card-badge-disabled">{{ t('Disabled') }}</span>
             <span v-else-if="skill.installed" class="skill-card-badge">{{ t('Installed') }}</span>
@@ -25,6 +23,18 @@
         </div>
         <span v-if="showOwner" class="skill-card-owner">{{ skill.owner }}</span>
       </div>
+      <button
+        v-if="showToggle && skill.installed && skill.path"
+        class="skill-card-toggle"
+        :class="{ 'is-on': skill.enabled !== false }"
+        type="button"
+        role="switch"
+        :aria-checked="skill.enabled !== false"
+        :aria-label="t('Enable {name}', { name: skill.displayName || skill.name })"
+        :title="isToggling ? t('Saving…') : (skill.enabled !== false ? t('Enabled') : t('Disabled'))"
+        :disabled="isToggling"
+        @click="$emit('toggle-enabled', skill, skill.enabled === false)"
+      ><span class="skill-card-toggle-thumb" /></button>
       <button
         v-if="showBrowseAction && skill.installed && skillDirPath"
         class="skill-card-browse"
@@ -35,11 +45,11 @@
         <IconTablerFolder class="skill-card-browse-icon" />
       </button>
     </div>
-    <p v-if="skill.description" class="skill-card-desc">{{ skill.description }}</p>
+    <button v-if="skill.description" class="skill-card-desc" type="button" @click="$emit('select', skill)">{{ skill.description }}</button>
     <div v-if="metaLabels.length > 0" class="skill-card-meta-row">
       <span v-for="label in metaLabels" :key="label" class="skill-card-meta">{{ label }}</span>
     </div>
-  </button>
+  </article>
 </template>
 
 <script setup lang="ts">
@@ -65,13 +75,17 @@ const props = withDefaults(defineProps<{
   showStatusBadge?: boolean
   showBrowseAction?: boolean
   showOwner?: boolean
+  showToggle?: boolean
+  isToggling?: boolean
 }>(), {
   showStatusBadge: true,
   showBrowseAction: true,
   showOwner: true,
+  showToggle: false,
+  isToggling: false,
 })
 
-defineEmits<{ select: [skill: unknown] }>()
+defineEmits<{ select: [skill: unknown]; 'toggle-enabled': [skill: unknown, enabled: boolean] }>()
 const { t } = useUiLanguage()
 const showStatusBadge = computed(() => props.showStatusBadge !== false)
 const showBrowseAction = computed(() => props.showBrowseAction !== false)
@@ -80,7 +94,7 @@ const showOwner = computed(() => props.showOwner !== false)
 const skillDirPath = computed(() => {
   const p = props.skill.path
   if (!p) return ''
-  return p.endsWith('/SKILL.md') ? p.slice(0, -'/SKILL.md'.length) : p
+  return p.replace(/\\/gu, '/').replace(/\/SKILL\.md$/iu, '')
 })
 
 function onBrowse(): void {
@@ -118,11 +132,11 @@ function onAvatarError(e: Event): void {
 @reference "tailwindcss";
 
 .skill-card {
-  @apply flex flex-col gap-1.5 rounded-xl border border-zinc-200 bg-white p-3 text-left transition hover:border-zinc-300 hover:shadow-sm cursor-pointer;
+  @apply flex flex-col gap-1.5 rounded-xl border border-zinc-200 bg-white p-3 text-left transition hover:border-zinc-300;
 }
 
 .skill-card.is-disabled {
-  @apply opacity-50;
+  @apply border-zinc-300;
 }
 
 .skill-card-top {
@@ -146,7 +160,7 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-name {
-  @apply text-sm font-medium text-zinc-900 truncate;
+  @apply text-sm font-medium text-zinc-900 truncate border-0 bg-transparent p-0 text-left cursor-pointer hover:underline;
 }
 
 .skill-card-badge {
@@ -170,7 +184,19 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-desc {
-  @apply m-0 text-xs text-zinc-500 line-clamp-2;
+  @apply m-0 text-[0.8125rem] text-zinc-600 line-clamp-2 border-0 bg-transparent p-0 text-left cursor-pointer;
+}
+
+.skill-card-toggle {
+  @apply relative shrink-0 w-9 h-5 my-1.5 rounded-full border-0 bg-zinc-300 cursor-pointer transition-colors disabled:cursor-wait disabled:opacity-50;
+}
+.skill-card-toggle.is-on { @apply bg-emerald-600; }
+.skill-card-toggle-thumb { @apply absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform; }
+.skill-card-toggle.is-on .skill-card-toggle-thumb { transform: translateX(1rem); }
+.skill-card-toggle:focus-visible { outline: 2px solid var(--color-emerald-600); outline-offset: 3px; }
+.skill-card-toggle::before { content: ''; position: absolute; inset: -0.65rem -0.3rem; }
+@media (prefers-reduced-motion: reduce) {
+  .skill-card-toggle, .skill-card-toggle-thumb { transition: none; }
 }
 
 .skill-card-meta-row {

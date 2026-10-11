@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 
 type AppServerLike = {
@@ -516,12 +516,30 @@ function groupRpcSkillRecords<T extends RpcSkillRecord>(skills: T[]): T[] {
 
 type InstalledSkillInfo = { name: string; path: string; enabled: boolean }
 
+function comparableSkillPath(value: string): string {
+  const normalized = posix.normalize(value.replace(/\\/gu, '/')).replace(/\/$/u, '')
+  return process.platform === 'win32' || /^[A-Za-z]:\//u.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+// Plugin skills also have scope=user. Only standalone personal install roots
+// belong in this list; hidden directories include the bundled .system skills.
+export function isPersonalSkillPath(skillPath: string, scope?: string): boolean {
+  if (!skillPath || (scope && scope.toLowerCase() !== 'user')) return false
+  const candidate = comparableSkillPath(skillPath)
+  return [getSkillsInstallDir(), join(homedir(), '.agents', 'skills')].some((root) => {
+    const prefix = `${comparableSkillPath(root)}/`
+    if (!candidate.startsWith(prefix)) return false
+    const parts = candidate.slice(prefix.length).split('/')
+    return parts.length >= 2 && parts.at(-1)?.toLowerCase() === 'skill.md' && parts.every((part) => part && !part.startsWith('.'))
+  })
+}
+
 async function scanInstalledSkillsFromDir(skillsDir: string): Promise<Map<string, InstalledSkillInfo>> {
   const map = new Map<string, InstalledSkillInfo>()
   try {
     const entries = await readdir(skillsDir, { withFileTypes: true })
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      if ((!entry.isDirectory() && !entry.isSymbolicLink()) || entry.name.startsWith('.')) continue
       const skillMd = join(skillsDir, entry.name, 'SKILL.md')
       try {
         await stat(skillMd)
@@ -536,16 +554,19 @@ async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkill
   return await scanInstalledSkillsFromDir(getSkillsInstallDir())
 }
 
-async function collectInstalledSkillsMap(appServer: AppServerLike): Promise<Map<string, InstalledSkillInfo>> {
+export async function collectInstalledSkillsMap(appServer: AppServerLike): Promise<Map<string, InstalledSkillInfo>> {
   const installedMap = await scanInstalledSkillsFromDisk()
-  try {
-    const result = await appServer.rpc('skills/list', { forceReload: true }) as { data?: Array<{ skills?: RpcSkillRecord[] }> }
-    for (const entry of result.data ?? []) {
-      for (const skill of entry.skills ?? []) {
-        if (skill.name) installedMap.set(skill.name, { name: skill.name, path: skill.path ?? '', enabled: skill.enabled !== false })
+  // Never show disk entries as enabled when Codex's actual state cannot be read.
+  const result = await appServer.rpc('skills/list', { forceReload: true }) as { data?: Array<{ skills?: RpcSkillRecord[] }> }
+  for (const entry of result.data ?? []) {
+    for (const skill of entry.skills ?? []) {
+      if (!skill.name || !skill.path || !isPersonalSkillPath(skill.path, skill.scope)) continue
+      for (const [name, installed] of installedMap) {
+        if (comparableSkillPath(installed.path) === comparableSkillPath(skill.path)) installedMap.delete(name)
       }
+      installedMap.set(skill.name, { name: skill.name, path: skill.path, enabled: skill.enabled !== false })
     }
-  } catch {}
+  }
   return installedMap
 }
 

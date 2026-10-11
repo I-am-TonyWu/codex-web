@@ -75,7 +75,7 @@ function getWorktreeName(): string {
 }
 
 const worktreeName = getWorktreeName();
-const appVersion = "1.4.6";
+const appVersion = "1.4.7";
 const WS_UPGRADE_ATTACHED_KEY = "__codexBridgeWsAttached__";
 
 function readEnvValueFromFile(filePath: string, key: string): string {

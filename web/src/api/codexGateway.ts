@@ -3562,6 +3562,12 @@ export async function getInstalledPlugins(cwds?: string[]): Promise<DirectoryPlu
     .filter(plugin => plugin.installed)
 }
 
+export async function setSkillEnabled(path: string, enabled: boolean): Promise<void> {
+  await callRpc('skills/config/write', { path, enabled })
+  extensionCache = null
+  extensionSnapshots.clear()
+}
+
 export async function getComposerPrompts(): Promise<ComposerPromptInfo[]> {
   try {
     const response = await fetch('/codex-api/prompts')

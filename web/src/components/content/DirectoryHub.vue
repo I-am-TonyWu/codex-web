@@ -2,12 +2,12 @@
   <div class="directory-hub">
     <div class="directory-header">
       <div>
-        <h2 class="directory-title">Skills & Apps</h2>
-        <p class="directory-subtitle">{{ activeCopy.subtitle }}</p>
+        <h2 class="directory-title">{{ t('Skills & Apps') }}</h2>
+        <p class="directory-subtitle">{{ t(activeCopy.subtitle) }}</p>
       </div>
       <div class="directory-header-actions">
         <button class="directory-refresh" type="button" :disabled="isManualRefreshInFlight" @click="manualRefreshActiveTab">
-          {{ isManualRefreshInFlight ? 'Refreshing...' : 'Refresh' }}
+          {{ isManualRefreshInFlight ? t('Refreshing...') : t('Refresh') }}
         </button>
       </div>
     </div>
@@ -23,7 +23,7 @@
         :aria-selected="activeTab === tab.id"
         @click="activeTab = tab.id"
       >
-        {{ tab.label }}
+        {{ t(tab.label) }}
       </button>
     </div>
 
@@ -35,8 +35,8 @@
           v-model="pluginSearchQuery"
           class="directory-search"
           type="search"
-          placeholder="Search plugins..."
-          aria-label="Search plugins"
+          :placeholder="t('Search plugins...')"
+          :aria-label="t('Search plugins...')"
         />
         <div class="directory-sort-group" role="group" aria-label="Sort plugins">
           <button
@@ -45,7 +45,7 @@
             type="button"
             @click="pluginSortMode = 'popular'"
           >
-            Popular
+            {{ t('Popular') }}
           </button>
           <button
             class="directory-sort-button"
@@ -53,7 +53,7 @@
             type="button"
             @click="pluginSortMode = 'name'"
           >
-            A-Z
+            {{ t('A-Z') }}
           </button>
           <button
             class="directory-sort-button"
@@ -61,7 +61,7 @@
             type="button"
             @click="pluginSortMode = 'date'"
           >
-            Date
+            {{ t('Date') }}
           </button>
         </div>
       </div>
@@ -69,8 +69,8 @@
         Plugin APIs unavailable in this Codex CLI. Update Codex CLI to use plugin catalog features.
       </div>
       <div v-else-if="pluginError" class="directory-error">{{ pluginError }}</div>
-      <div v-else-if="isLoadingPlugins" class="directory-loading">Loading plugins...</div>
-      <div v-else-if="visiblePlugins.length === 0" class="directory-empty">No plugins found.</div>
+      <div v-else-if="isLoadingPlugins" class="directory-loading">{{ t('Loading plugins...') }}</div>
+      <div v-else-if="visiblePlugins.length === 0" class="directory-empty">{{ t('No installed plugins found.') }}</div>
       <div v-else class="directory-grid">
         <button
           v-for="plugin in visiblePlugins"
@@ -94,8 +94,8 @@
             <div class="directory-card-main">
               <div class="directory-card-title-row">
                 <span class="directory-card-title">{{ plugin.displayName }}</span>
-                <span v-if="plugin.installed && !plugin.enabled" class="directory-badge is-muted">Disabled</span>
-                <span v-else-if="plugin.installed" class="directory-badge">Installed</span>
+                <span v-if="plugin.installed && !plugin.enabled" class="directory-badge is-muted">{{ t('Disabled') }}</span>
+                <span v-else-if="plugin.installed" class="directory-badge">{{ t('Installed') }}</span>
               </div>
               <span class="directory-card-meta">{{ plugin.developerName || plugin.marketplaceDisplayName || plugin.marketplaceName || 'Plugin' }}</span>
             </div>
@@ -110,13 +110,14 @@
     </section>
 
     <section v-else-if="activeTab === 'apps'" class="directory-section">
+      <p class="directory-subtitle">{{ t('Apps connect external services such as GitHub and Google Drive. Connected services let Codex use their data and tools.') }}</p>
       <div class="directory-toolbar">
         <input
           v-model="appSearchQuery"
           class="directory-search"
           type="search"
-          placeholder="Search apps..."
-          aria-label="Search apps"
+          :placeholder="t('Search apps...')"
+          :aria-label="t('Search apps...')"
         />
         <div class="directory-sort-group" role="group" aria-label="Sort apps">
           <button
@@ -125,7 +126,7 @@
             type="button"
             @click="appSortMode = 'popular'"
           >
-            Popular
+            {{ t('Popular') }}
           </button>
           <button
             class="directory-sort-button"
@@ -133,7 +134,7 @@
             type="button"
             @click="appSortMode = 'name'"
           >
-            A-Z
+            {{ t('A-Z') }}
           </button>
           <button
             class="directory-sort-button"
@@ -141,7 +142,7 @@
             type="button"
             @click="appSortMode = 'date'"
           >
-            Date
+            {{ t('Date') }}
           </button>
         </div>
       </div>
@@ -149,8 +150,8 @@
         Apps APIs unavailable in this Codex CLI. Update Codex CLI to manage apps.
       </div>
       <div v-else-if="appError" class="directory-error">{{ appError }}</div>
-      <div v-else-if="isLoadingApps" class="directory-loading">Loading apps...</div>
-      <div v-else-if="visibleApps.length === 0" class="directory-empty">No apps found.</div>
+      <div v-else-if="isLoadingApps" class="directory-loading">{{ t('Loading apps...') }}</div>
+      <div v-else-if="visibleApps.length === 0" class="directory-empty">{{ t('No apps found.') }}</div>
       <div v-else class="directory-grid">
         <article v-for="app in visibleApps" :key="app.id" class="directory-card">
           <div class="directory-card-top">
@@ -159,8 +160,8 @@
             <div class="directory-card-main">
               <div class="directory-card-title-row">
                 <span class="directory-card-title">{{ app.name }}</span>
-                <span v-if="!app.isEnabled" class="directory-badge is-muted">Disabled</span>
-                <span v-else-if="app.isAccessible" class="directory-badge">Connected</span>
+                <span v-if="!app.isEnabled" class="directory-badge is-muted">{{ t('Disabled') }}</span>
+                <span v-else-if="app.isAccessible" class="directory-badge">{{ t('Connected') }}</span>
               </div>
               <span class="directory-card-meta">{{ appMetaLabel(app) }}</span>
             </div>
@@ -172,10 +173,10 @@
           </div>
           <div class="directory-card-actions">
             <button class="directory-action" type="button" :disabled="appActionId === app.id" @click="toggleApp(app)">
-              {{ app.isEnabled ? 'Disable' : 'Enable' }}
+              {{ t(app.isEnabled ? 'Disable' : 'Enable') }}
             </button>
             <button v-if="app.installUrl" class="directory-action-link" type="button" @click="openExternalUrl(app.installUrl)">
-              {{ app.isAccessible ? 'Manage' : 'Login' }}
+              {{ t(app.isAccessible ? 'Manage' : 'Login') }}
             </button>
             <button
               v-if="app.isAccessible && app.isEnabled"
@@ -184,7 +185,7 @@
               :disabled="isTryActionInFlight"
               @click="tryApp(app)"
             >
-              {{ props.tryInFlightKey === appTryKey(app) ? 'Starting...' : 'Try it!' }}
+              {{ t(props.tryInFlightKey === appTryKey(app) ? 'Starting...' : 'Try it!') }}
             </button>
           </div>
         </article>
@@ -193,6 +194,7 @@
 
     <section v-else-if="activeTab === 'skills'" class="directory-section">
       <SkillsHub
+        ref="skillsHub"
         :try-in-flight-key="props.tryInFlightKey"
         @skills-changed="emit('skills-changed')"
         @try-item="(payload) => emit('try-item', payload)"
@@ -209,7 +211,7 @@
               </div>
               <div v-else-if="mcpError" class="directory-error">{{ mcpError }}</div>
               <div v-else-if="isLoadingMcps" class="directory-loading">Loading MCP servers...</div>
-              <div v-else-if="visibleMcpServers.length === 0" class="directory-empty">No MCP servers configured.</div>
+            <div v-else-if="visibleMcpServers.length === 0" class="directory-empty">{{ t('No MCP servers configured.') }}</div>
               <div v-else class="mcp-skill-grid">
                 <article v-for="server in visibleMcpServers" :key="server.name">
                   <button class="mcp-skill-card skill-card" type="button" @click="toggleMcpExpanded(server.name)">
@@ -264,7 +266,7 @@
                 <span class="directory-card-meta">{{ selectedPlugin?.developerName || selectedPlugin?.marketplaceDisplayName || selectedPlugin?.marketplaceName }}</span>
               </div>
             </div>
-            <button class="directory-modal-close" type="button" aria-label="Close plugin detail" @click="closePluginDetail">Close</button>
+            <button class="directory-modal-close" type="button" aria-label="Close plugin detail" @click="closePluginDetail">{{ t('Close') }}</button>
           </div>
 
           <div class="directory-modal-body">
@@ -282,7 +284,7 @@
 
               <div class="directory-detail-grid">
                 <div v-if="selectedPluginDetail.apps.length > 0" class="directory-detail-block">
-                  <h4 class="directory-detail-heading">Apps</h4>
+                  <h4 class="directory-detail-heading">{{ t('Apps') }}</h4>
                   <div v-for="app in selectedPluginDetail.apps" :key="app.id" class="directory-include-row">
                     <span>{{ app.name }}</span>
                     <span v-if="isPluginDetailAppUnavailable(app)" class="directory-auth-status is-warning">GPT Plus account required</span>
@@ -290,7 +292,7 @@
                   </div>
                 </div>
                 <div v-if="selectedPluginDetail.skills.length > 0" class="directory-detail-block">
-                  <h4 class="directory-detail-heading">Skills</h4>
+                  <h4 class="directory-detail-heading">{{ t('Skills') }}</h4>
                   <p class="directory-mini-list">{{ selectedPluginDetail.skills.map((skill) => skill.displayName || skill.name).join(', ') }}</p>
                 </div>
                 <div v-if="selectedPluginDetail.mcpServers.length > 0" class="directory-detail-block">
@@ -322,7 +324,7 @@
                 <strong>Apps needing auth</strong>
                 <div v-for="app in installAuthApps" :key="app.id" class="directory-include-row">
                   <span>{{ app.name }}</span>
-                  <button v-if="app.installUrl" type="button" @click="openExternalUrl(app.installUrl)">Login</button>
+                  <button v-if="app.installUrl" type="button" @click="openExternalUrl(app.installUrl)">{{ t('Login') }}</button>
                 </div>
               </div>
             </template>
@@ -390,7 +392,6 @@ import {
   installDirectoryPlugin,
   listDirectoryApps,
   listDirectoryMcpServers,
-  listDirectoryPlugins,
   getInstalledPlugins,
   readDirectoryPlugin,
   reloadDirectoryMcpServers,
@@ -405,6 +406,7 @@ import {
   type DirectoryPluginSummary,
 } from '../../api/codexGateway'
 import SkillsHub from './SkillsHub.vue'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 
 type DirectorySortMode = 'popular' | 'name' | 'date'
 
@@ -477,11 +479,13 @@ const emit = defineEmits<{
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useUiLanguage()
+const skillsHub = ref<InstanceType<typeof SkillsHub> | null>(null)
 
 const tabs: Array<{ id: DirectoryTab; label: string; subtitle: string }> = [
-  { id: 'plugins', label: 'Plugins', subtitle: 'Plugins make Codex work your way.' },
+  { id: 'plugins', label: 'Plugins', subtitle: 'Manage installed plugins on this machine.' },
   { id: 'apps', label: 'Apps', subtitle: 'Connect Codex to external apps and services.' },
-  { id: 'skills', label: 'Skills', subtitle: 'MCPs first, then installed skills.' },
+  { id: 'skills', label: 'Skills', subtitle: 'Manage personal skills and MCP connections.' },
 ]
 
 function isDirectoryTab(value: unknown): value is DirectoryTab {
@@ -564,7 +568,7 @@ const selectedPluginInstallUnavailable = computed(() =>
   selectedPlugin.value?.installPolicy === 'NOT_AVAILABLE' ||
   (selectedPluginDetail.value?.apps.some((app) => isPluginDetailAppUnavailable(app)) ?? false),
 )
-const visiblePlugins = computed(() => limitPopularRows(sortPlugins(filterPlugins(plugins.value, pluginSearchQuery.value), pluginSortMode.value), pluginSortMode.value, pluginSearchQuery.value))
+const visiblePlugins = computed(() => sortPlugins(filterPlugins(plugins.value.filter(plugin => plugin.installed), pluginSearchQuery.value), pluginSortMode.value))
 const visibleApps = computed(() => limitPopularApps(sortApps(filterApps(apps.value, appSearchQuery.value), appSortMode.value), appSortMode.value, appSearchQuery.value))
 const visibleMcpServers = computed(() => sortMcpServers(mcpServers.value, 'popular'))
 const mcpStatusByName = computed(() => new Map(mcpServers.value.map((server) => [server.name, server])))
@@ -673,10 +677,6 @@ function mcpCardBadgeClass(status: string): string {
 
 function shouldShowMcpLogin(serverName: string): boolean {
   return supportsMcpLogin.value && getMcpAuthStatus(serverName) === 'notLoggedIn'
-}
-
-function limitPopularRows<T>(rows: T[], sortMode: DirectorySortMode, query: string): T[] {
-  return sortMode === 'popular' && normalizeSearch(query).length === 0 ? rows.slice(0, POPULAR_LIMIT) : rows
 }
 
 function limitPopularApps(rows: DirectoryAppInfo[], sortMode: DirectorySortMode, query: string): DirectoryAppInfo[] {
@@ -848,11 +848,8 @@ async function loadPlugins(): Promise<void> {
   pluginError.value = ''
   try {
     const cwd = props.cwd?.trim()
-    const [nextPlugins] = await Promise.all([
-      listDirectoryPlugins(cwd ? [cwd] : undefined),
-      supportsApps.value ? loadApps() : Promise.resolve(),
-    ])
-    plugins.value = nextPlugins
+    if (supportsApps.value) void loadApps()
+    plugins.value = await getInstalledPlugins(cwd ? [cwd] : undefined)
   } catch (error) {
     pluginError.value = error instanceof Error ? error.message : 'Failed to load plugins'
   } finally {
@@ -909,8 +906,10 @@ async function manualRefreshActiveTab(): Promise<void> {
   try {
     if (activeTab.value === 'plugins') await loadPlugins()
     else if (activeTab.value === 'apps') await loadApps()
-    else if (activeTab.value === 'skills' && supportsMcpReload.value) await reloadMcps()
-    else if (activeTab.value === 'skills') await loadMcps()
+    else if (activeTab.value === 'skills') await Promise.all([
+      skillsHub.value?.refresh(),
+      supportsMcpReload.value ? reloadMcps() : loadMcps(),
+    ])
   } finally {
     isManualRefreshInFlight.value = false
   }
@@ -1087,10 +1086,7 @@ onMounted(async () => {
     if (document.hidden || activeTab.value !== 'plugins' || isLoadingPlugins.value) return
     try {
       const installed = await getInstalledPlugins(props.cwd ? [props.cwd] : undefined)
-      const ids = new Set(installed.map(p => p.id))
-      const merged = new Map(plugins.value.map(p => [p.id, { ...p, installed: ids.has(p.id) }]))
-      for (const plugin of installed) merged.set(plugin.id, plugin)
-      plugins.value = [...merged.values()]
+      plugins.value = installed
     } catch { /* Keep the last usable directory while offline. */ }
   }, 30_000)
   await loadMethods()
@@ -1137,11 +1133,12 @@ onMounted(async () => {
 }
 
 .directory-tabs {
-  @apply mx-auto grid w-full max-w-5xl grid-cols-4 rounded-lg border border-zinc-200 bg-zinc-100 p-1;
+  @apply mx-auto flex w-full max-w-5xl shrink-0 overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-100 p-1;
 }
 
 .directory-tab {
-  @apply rounded-md border-0 bg-transparent px-2 py-1.5 text-sm font-medium text-zinc-500 transition hover:text-zinc-800;
+  @apply flex-1 whitespace-nowrap rounded-md border-0 bg-transparent px-2 py-1.5 text-sm font-medium text-zinc-500 transition hover:text-zinc-800;
+  min-width: max-content;
 }
 
 .directory-tab.is-active {

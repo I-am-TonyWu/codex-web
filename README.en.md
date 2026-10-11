@@ -10,6 +10,8 @@ Current stable version: **1.4.3.6**. Latest preview: **[1.4.4](https://github.co
 
 1.4.4 includes the cumulative changes from local builds 1.4.3.10–1.4.3.12: natural-language tool summaries, collapsed commands and process images, and persistent task status. The browser only connects to the host's existing login; manage Codex accounts in the Windows client. Quota is at the top of settings, Ctrl+Enter submission is supported, and Telegram has been removed.
 
+The source includes local revision **1.4.4.1**, which removes provider switching and places compact task status and collapsed controls above the composer. It has not been published. See the [local revision notes](docs/CHANGELOG-1.4.4.1.md) and [Antigravity feasibility assessment](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md).
+
 ## Download and requirements
 
 Read the [changes since the last public release](docs/releases/1.4.3.6.md), [host migration guide](migration/README.md), and [Windows sandbox guidance](docs/WINDOWS-SANDBOX.md).

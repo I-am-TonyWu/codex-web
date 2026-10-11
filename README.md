@@ -10,6 +10,8 @@
 
 1.4.4 包含此前本地 1.4.3.10–1.4.3.12 的累计更新：工具操作使用自然语言摘要，命令和过程图片默认折叠，任务状态固定显示。网页仅连接主机已登录的 Codex；账户操作在 Windows 客户端完成。设置顶部显示额度，支持 Ctrl+Enter 发送，Telegram 已移除。
 
+源码中的本地修订为 **1.4.4.1**：移除提供方切换，控制区默认折叠，任务状态移到输入框上方。该修订尚未公开发布，见[本地修订说明](docs/CHANGELOG-1.4.4.1.md)和[Antigravity接入评估](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md)。
+
 ## 下载和系统要求
 
 本次版本相较上次公开版的[完整更新说明](docs/releases/1.4.3.6.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。Windows 沙箱问题见[沙箱修复说明](docs/WINDOWS-SANDBOX.md)。

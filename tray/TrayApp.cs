@@ -323,7 +323,7 @@ namespace CodexWebTray {
     }
 
     internal static class Program {
-        internal const string Version = "1.4.4";
+        internal const string Version = "1.4.4.1";
         internal static readonly string PipeName = "CodexWebTray-" + WindowsIdentity.GetCurrent().User.Value + "-" + Process.GetCurrentProcess().SessionId;
         internal static string Send(string command) {
             using (var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous)) {

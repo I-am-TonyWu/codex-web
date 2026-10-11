@@ -70,30 +70,42 @@ describe('connection-only remote service', () => {
     await expect(readFile(join(home,'rpc-audit.jsonl'),'utf8')).rejects.toThrow()
     expect(await readFile(join(home,'auth.json'),'utf8')).toBe(originalAuth)
   })
-  it('switches providers and returns to Codex with host auth/config unchanged', async () => {
-    await request('/codex-api/rpc',{method:'account/read',params:{refreshToken:true}})
+  it('ignores saved third-party choices and uses host Codex auth without rewriting files', async () => {
     for(const provider of ['openrouter','opencode-zen','custom']) {
-      expect((await request('/codex-api/free-mode/custom-provider',{provider,apiKey:'fixture-key',baseUrl:'http://127.0.0.1:9999/v1'})).status).toBe(200)
-      expect((await request('/codex-api/free-mode/status')).body.provider).toBe(provider)
-      await request('/codex-api/rpc',{method:'model/list',params:{}})
-      expect((await request('/codex-api/free-mode',{enable:false})).status).toBe(200)
-      expect((await request('/codex-api/free-mode/status')).body.enabled).toBe(false)
+      const saved=JSON.stringify({enabled:true,provider,model:'third-party-model',apiKey:'fixture-key',customBaseUrl:'http://127.0.0.1:9999/v1'})
+      await writeFile(join(home,'webui-custom-providers.json'),saved)
+      expect((await request('/codex-api/free-mode/status')).body).toMatchObject({enabled:false,provider:'codex',switchingEnabled:false})
+      expect((await request('/codex-api/rpc',{method:'model/list',params:{}})).body.result.data[0].model).toBe('host-model')
       expect((await request('/codex-api/rpc',{method:'account/rateLimits/read',params:{}})).body.result.rateLimits.primary.usedPercent).toBe(10)
+      expect(await readFile(join(home,'webui-custom-providers.json'),'utf8')).toBe(saved)
       expect(await readFile(join(home,'auth.json'),'utf8')).toBe(originalAuth)
       expect(await readFile(join(home,'config.toml'),'utf8')).toBe(originalConfig)
     }
+    await request('/codex-api/rpc',{method:'account/read',params:{refreshToken:true}})
     const audit=(await readFile(join(home,'rpc-audit.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line))
     expect(audit.filter(row=>row.args).every(row=>row.args.includes('cli_auth_credentials_store="ephemeral"'))).toBe(true)
     expect(audit.filter(row=>row.method==='account/read').every(row=>row.refreshToken===false)).toBe(true)
     expect(audit.filter(row=>row.method==='account/login/start').every(row=>row.loginType==='chatgptAuthTokens')).toBe(true)
-    expect(audit.filter(row=>row.method==='account/login/start')).toHaveLength(4)
+    expect(audit.filter(row=>row.method==='account/login/start')).toHaveLength(1)
+    expect(audit.filter(row=>row.args)).toHaveLength(1)
+    expect(audit.filter(row=>row.args).every(row=>!row.args.some((arg:string)=>/third-party-model|fixture-key|proxy|openrouter|opencode/.test(arg)))).toBe(true)
     expect(audit.some(row=>row.method==='account/logout')).toBe(false)
   })
-  it('does not interrupt an active task when changing provider', async () => {
+  it('rejects stale provider routes before spawning Codex or touching configuration', async () => {
+    for(const route of ['/free-mode','/free-mode/custom-provider','/free-mode/custom-key','/free-mode/model','/openrouter-proxy/v1/responses','/zen-proxy/v1/responses','/custom-proxy/v1/responses']) {
+      const result=await request('/codex-api'+route,{provider:'openrouter',enable:true,apiKey:'fixture-key'})
+      expect(result.status).toBe(410); expect(result.body.error).toBe('provider_switching_disabled')
+    }
+    await expect(readFile(join(home,'rpc-audit.jsonl'),'utf8')).rejects.toThrow()
+    await expect(readFile(join(home,'webui-custom-providers.json'),'utf8')).rejects.toThrow()
+    expect(await readFile(join(home,'auth.json'),'utf8')).toBe(originalAuth)
+    expect(await readFile(join(home,'config.toml'),'utf8')).toBe(originalConfig)
+  })
+  it('does not interrupt an active task when a stale client attempts to change provider', async () => {
     await request('/codex-api/rpc',{method:'model/list',params:{}})
     await writeFile(join(home,'busy'),'true')
     const result=await request('/codex-api/free-mode/custom-provider',{provider:'opencode-zen'})
-    expect(result.status).toBe(409); expect(result.body.error).toBe('provider_busy')
+    expect(result.status).toBe(410); expect(result.body.error).toBe('provider_switching_disabled')
     await expect(readFile(join(home,'webui-custom-providers.json'),'utf8')).rejects.toThrow()
     expect(await readFile(join(home,'auth.json'),'utf8')).toBe(originalAuth)
     expect((await request('/codex-api/rpc',{method:'model/list',params:{}})).status).toBe(200)

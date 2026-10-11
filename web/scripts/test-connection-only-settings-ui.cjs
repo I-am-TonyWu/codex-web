@@ -13,7 +13,7 @@ const screenshots = process.env.SETTINGS_SCREENSHOT_DIR;
       const page = await browser.newPage({viewport:{width,height:900},colorScheme});
       page.setDefaultTimeout(10000);
       const errors=[], calls=[], writes=[], forbidden=[];
-      let provider='codex', failProvider=false;
+      const provider='codex';
       const original='11111111-1111-4111-8111-111111111111';
       const control={threadId:original,epoch:'fixture',version:0,owner:null,proof:null,activity:'idle',executionSource:'web'};
       const thread={id:original,name:'设置验证',cwd:'C:/Fixture',createdAt:1760000000,updatedAt:1760000100,status:{type:'notLoaded'},turns:[]};
@@ -36,12 +36,7 @@ const screenshots = process.env.SETTINGS_SCREENSHOT_DIR;
         }
         if(pathname==='/codex-api/thread-titles')json={titles:{[original]:thread.name}};
         if(pathname==='/codex-api/workspace-roots-state')json={data:{order:[],labels:{},active:[],localProjects:[]}};
-        if(pathname==='/codex-api/free-mode/status')json={enabled:provider!=='codex',hasCodexAuth:true,provider:provider==='codex'?undefined:provider,models:['fixture-model'],customKey:false,keyCount:0};
-        if(pathname==='/codex-api/free-mode/custom-provider') {
-          if(failProvider)return route.fulfill({status:409,json:{error:'provider_busy',message:'有任务正在运行，请结束任务后再切换提供方。'}});
-          provider=route.request().postDataJSON().provider;json={ok:true};
-        }
-        if(pathname==='/codex-api/free-mode'){provider='codex';json={ok:true,enabled:false};}
+        if(pathname.startsWith('/codex-api/free-mode')) { forbidden.push(pathname); return route.fulfill({status:410,json:{error:'provider_switching_disabled'}}); }
         if(pathname==='/codex-api/provider-models')json={data:['fixture-model'],exclusive:provider!=='codex'};
         if(pathname==='/codex-api/rpc') {
           const {method,params}=route.request().postDataJSON(); calls.push(method);
@@ -68,17 +63,25 @@ const screenshots = process.env.SETTINGS_SCREENSHOT_DIR;
       assert.equal(await page.locator('.sidebar-settings-panel').evaluate(el=>el.firstElementChild.classList.contains('sidebar-settings-rate-limits')),true);
       await page.getByRole('button',{name:'需要 Ctrl + Enter 才发送',exact:true}).click();
       if(screenshots){fs.mkdirSync(screenshots,{recursive:true});await page.screenshot({path:path.join(screenshots,`${colorScheme}-${width}-settings.png`)});}
-      const selectProvider=async label=>{await openSettings();const dropdown=page.locator('.sidebar-settings-provider-dropdown').last();await dropdown.locator('.composer-dropdown-trigger').click();await dropdown.getByRole('button',{name:label,exact:true}).click();};
-      await selectProvider('OpenCode Zen');
-      await page.waitForTimeout(400);
-      assert.equal(await page.locator('.sidebar-settings-provider-dropdown').last().locator('.composer-dropdown-value').innerText(),'OpenCode Zen');
-      await selectProvider('Codex'); await page.waitForTimeout(450);
-      assert.equal(await page.locator('.sidebar-settings-provider-dropdown').last().locator('.composer-dropdown-value').innerText(),'Codex');
-      failProvider=true; await selectProvider('OpenCode Zen');
-      await page.locator('.sidebar-settings-error').filter({hasText:'有任务正在运行'}).waitFor();
-      assert.equal(await page.locator('.sidebar-settings-provider-dropdown').last().locator('.composer-dropdown-value').innerText(),'Codex');
+      assert.equal(await page.locator('.sidebar-settings-provider-dropdown').count(),0);
+      for(const name of ['OpenRouter','OpenCode Zen','Custom endpoint','提供方']) assert.equal(await page.locator('.sidebar-settings-panel').getByText(name,{exact:true}).count(),0);
       await page.locator('.sidebar-settings-button').click();
       if(width<768)await page.locator('.mobile-drawer-backdrop').click({position:{x:width-8,y:40}});
+      const disclosure=page.locator('details.control-bar');
+      await disclosure.waitFor();
+      assert.equal(await disclosure.evaluate(el=>el.open),false,'control options default collapsed');
+      assert.equal(await disclosure.getByRole('button',{name:'取得控制权',exact:true}).isVisible(),false);
+      await disclosure.locator(':scope > summary').press('Enter');
+      assert.equal(await disclosure.evaluate(el=>el.open),true,'keyboard expands controls');
+      assert.equal(await disclosure.getByRole('button',{name:'取得控制权',exact:true}).isVisible(),true);
+      await disclosure.locator(':scope > summary').press('Enter');
+      assert.equal(await disclosure.evaluate(el=>el.open),false);
+      const layout=await page.evaluate(()=>{
+        const dock=document.querySelector('.conversation-status-dock').getBoundingClientRect();
+        const input=document.querySelector('textarea.thread-composer-input').getBoundingClientRect();
+        return {dockBottom:dock.bottom,inputTop:input.top,height:dock.height,font:getComputedStyle(document.querySelector('.task-status-bar')).fontSize};
+      });
+      assert.equal(layout.font,'12px'); assert.ok(layout.height<=100); assert.ok(layout.dockBottom<=layout.inputTop);
       const input=page.locator('textarea.thread-composer-input');
       await input.fill('键盘测试，仅发送给本地测试夹具');
       await input.press('Enter'); await input.press('Meta+Enter'); await input.press('Shift+Enter');
@@ -96,6 +99,6 @@ const screenshots = process.env.SETTINGS_SCREENSHOT_DIR;
       await page.close();scenarios+=7;
       console.log(`Passed ${colorScheme} ${width}`);
     }
-    console.log(JSON.stringify({passed:true,scenarios,realModelRequests:0,checks:['no accounts or Telegram','quota at top','Ctrl shortcut and persistence','provider roundtrip','busy rollback','no auth mutation calls','mobile layout']}));
+    console.log(JSON.stringify({passed:true,scenarios,realModelRequests:0,checks:['no accounts or Telegram','quota at top','Ctrl shortcut and persistence','provider UI and requests removed','collapsed keyboard controls','compact status above input','no auth mutation calls','mobile layout']}));
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -610,7 +610,7 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
     }
   })
 
-  it('keeps an explicit community provider selection after Codex auth appears', async () => {
+  it('ignores an old community provider selection after Codex auth appears', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-auth-community-provider-'))
     const statePath = join(codexHome, 'webui-custom-providers.json')
     process.env.CODEX_HOME = codexHome
@@ -625,13 +625,14 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
         wireApi: 'responses',
       }))
 
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)?.provider).toBe('openrouter')
+      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
+      expect(JSON.parse(await readFile(statePath, 'utf8')).provider).toBe('openrouter')
     } finally {
       await rm(codexHome, { recursive: true, force: true })
     }
   })
 
-  it('keeps user configured provider state after Codex auth appears', async () => {
+  it('preserves a legacy provider file without applying it to the host', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-auth-custom-provider-'))
     const statePath = join(codexHome, 'webui-custom-providers.json')
     process.env.CODEX_HOME = codexHome
@@ -647,7 +648,8 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
       }
       await writeFile(statePath, JSON.stringify(configuredState))
 
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toEqual(configuredState)
+      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
+      expect(JSON.parse(await readFile(statePath, 'utf8'))).toEqual(configuredState)
     } finally {
       await rm(codexHome, { recursive: true, force: true })
     }

@@ -1,16 +1,6 @@
 <template>
   <section v-mermaid class="conversation-root" @mermaid-resize="onPendingImageSettled" @contextmenu.capture="onConversationContextMenu">
-    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="emit('retryWriter', activeThreadId)" @status-known="controlStatusKnown = $event" />
     <a v-if="cwd" class="conversation-files-link" :href="toBrowseUrl(cwd)" target="_blank" rel="noopener">查看 / 下载项目文件</a>
-    <aside v-if="activeThreadId" class="task-status-bar" :data-state="taskState.kind" aria-label="任务状态">
-      <div class="task-status-copy" role="status" aria-live="polite" aria-atomic="true">
-        <span class="task-status-dot" aria-hidden="true" />
-        <strong>{{ taskState.label }}</strong>
-        <span v-if="taskState.detail" class="task-status-detail">{{ taskState.detail }}</span>
-      </div>
-      <button v-if="taskState.kind === 'waiting' || taskState.kind === 'failed'" type="button" class="task-status-action" @click="jumpToLatest">{{ taskState.kind === 'waiting' ? '查看待处理项' : '查看详情' }}</button>
-      <button v-else-if="showJumpToLatestButton" type="button" class="task-status-action" @click="jumpToLatest">回到最新</button>
-    </aside>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
@@ -702,8 +692,21 @@
       <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
     </ul>
 
+    <div v-if="activeThreadId" class="conversation-status-dock">
+    <aside class="task-status-bar" :data-state="taskState.kind" aria-label="任务状态">
+      <div class="task-status-copy" role="status" aria-live="polite" aria-atomic="true">
+        <span class="task-status-dot" aria-hidden="true" />
+        <strong>{{ taskState.label }}</strong>
+        <span v-if="taskState.detail" class="task-status-detail">{{ taskState.detail }}</span>
+      </div>
+      <button v-if="taskState.kind === 'waiting' || taskState.kind === 'failed'" type="button" class="task-status-action" @click="jumpToLatest">{{ taskState.kind === 'waiting' ? '查看待处理项' : '查看详情' }}</button>
+      <button v-else-if="showJumpToLatestButton" type="button" class="task-status-action" @click="jumpToLatest">回到最新</button>
+    </aside>
+    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="emit('retryWriter', activeThreadId)" @status-known="controlStatusKnown = $event" />
+    </div>
+
     <button
-      v-if="showJumpToLatestButton"
+      v-if="showJumpToLatestButton && !activeThreadId"
       type="button"
       class="jump-to-latest-button"
       title="Jump to latest"
@@ -4407,7 +4410,9 @@ onBeforeUnmount(() => {
 @reference "tailwindcss";
 
 
-.task-status-bar { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 16px 12px; padding: 9px 12px; border-radius: 9px; background: var(--activity-bg, #f1f5f9); color: var(--activity-text, #334155); font-size: 13px; }
+.conversation-status-dock { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 14px; width: calc(100% - 48px); max-width: var(--chat-column-max, 45rem); max-height: 45%; overflow-y: auto; margin: auto auto 0; padding: 5px 0; color: var(--activity-muted, #64748b); font-size: 12px; }
+.conversation-status-dock :deep(.control-bar[open]) { flex-basis: 100%; }
+.task-status-bar { min-width: 0; flex: 1 1 240px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; }
 .task-status-copy { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; line-height: 1.5; }
 .task-status-copy strong { font-weight: 600; }
 .task-status-detail { color: var(--activity-muted, #64748b); }
@@ -4419,7 +4424,7 @@ onBeforeUnmount(() => {
 .task-status-action { flex-shrink: 0; padding: 4px 7px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .task-status-action:hover { background: rgb(128 128 128 / 12%); }
 @keyframes task-pulse { 50% { opacity: .35; } }
-@media (max-width: 480px) { .task-status-bar { margin: 4px 10px 8px; } .task-status-detail { flex-basis: 100%; margin-left: 14px; font-size: 12px; } }
+@media (max-width: 480px) { .conversation-status-dock { width: calc(100% - 24px); gap: 0; padding: 3px 0; } .task-status-bar { flex-basis: 100%; } }
 @media (prefers-reduced-motion: reduce) { [data-state='running'] .task-status-dot { animation: none; } }
 
 .conversation-root {

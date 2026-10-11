@@ -1,16 +1,19 @@
 <template>
-  <aside class="control-bar" aria-label="会话控制" :aria-busy="busy">
-    <div class="control-summary" role="status">
+  <details class="control-bar" aria-label="会话控制" :aria-busy="busy" :open="expanded" @toggle="onToggle">
+    <summary class="control-summary" :aria-label="`${label}，${expanded ? '收起' : '展开'}控制选项`">
       <span class="control-dot" :class="{ owned: state?.proof, blocked: state?.activity === 'external' }" />
-      <span>{{ label }}</span>
-    </div>
+      <span role="status">{{ label }}</span>
+      <span v-if="notice && connectionKnown" class="control-hint" :title="notice">· 有提示</span>
+      <span class="control-toggle-label">选项</span>
+      <span class="control-chevron" aria-hidden="true">⌄</span>
+    </summary>
     <div class="control-actions">
       <button v-if="!state?.proof" :disabled="busy || !state" @click="takeover(false)">{{ state?.owner ? '接管此对话' : '取得控制权' }}</button>
       <button v-if="state?.turnId && ['running', 'approval'].includes(state.activity)" :disabled="busy" @click="takeover(true)">停止任务并接管</button>
       <button v-if="state?.proof" :disabled="busy" @click="leave">退出控制</button>
       <button :disabled="busy" @click="refresh">刷新网页控制</button>
       <button :disabled="busy || retrying || Boolean(state?.owner && !state?.proof)" @click="emit('retry')">{{ retrying ? '正在检查…' : '重新检查写入状态' }}</button>
-      <details>
+      <details class="control-help">
         <summary>交接说明</summary>
         <p>接管网页控制后，当前任务继续运行。旧网页只能查看；两端草稿不会自动发送。退出、断线或后台超过 30 秒后，其他网页可取得控制，任务继续。</p>
         <p>接管或服务重启后，原待发送队列暂停，请编辑后明确重新排队或手动发送。</p>
@@ -22,7 +25,7 @@
       </details>
     </div>
     <p v-if="notice" class="control-notice" role="status">{{ notice }}</p>
-  </aside>
+  </details>
 </template>
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -31,22 +34,26 @@ const props = defineProps<{ threadId: string; retrying?: boolean }>()
 const emit = defineEmits<{ acquired: []; retry: []; statusKnown: [known: boolean] }>()
 const busy = ref(false)
 const notice = ref('')
+const expanded = ref(false)
+const connectionKnown = ref(false)
+function onToggle(event: Event) { expanded.value = (event.target as HTMLDetailsElement).open }
+function setKnown(known: boolean) { connectionKnown.value = known; emit('statusKnown', known) }
 const state = computed(() => conversationStates[props.threadId])
 const label = computed(() => {
   const value = state.value
-  if (!value) return '正在确认会话控制状态…'
+  if (!connectionKnown.value || !value) return '控制状态待确认'
   if (value.transferring) return '正在交接，请稍候'
   if (value.activity === 'external' && value.owner && !value.proof) return `其他${value.owner.label}控制 · 当前只读`
-  if (value.activity === 'external') return '上次检测到本机后台占用 · 可重新检查或发送重试'
-  const owner = value.proof ? '本网页控制' : value.owner ? `其他${value.owner.label}控制 · 当前只读` : '尚未取得网页控制权 · 发送时检查本机写入状态'
-  return owner + (value.executionSource === 'desktop' ? ' · 桌面后台协同' : '') + (value.activity === 'running' ? ' · 任务运行中' : value.activity === 'approval' ? ' · 等待审批' : '')
+  if (value.activity === 'external') return '本机占用待检查'
+  const owner = value.proof ? '本网页控制' : value.owner ? `其他${value.owner.label}控制 · 只读` : '网页控制未取得'
+  return owner + (value.executionSource === 'desktop' ? ' · 桌面协同' : '')
 })
 async function run(action: () => Promise<unknown>) {
   if (busy.value) return
   busy.value = true; notice.value = ''
   try { await action() } catch (error) { notice.value = error instanceof Error ? error.message : '连接失败，请刷新状态。' } finally { busy.value = false }
 }
-async function refresh() { await run(async () => { try { await refreshControl(props.threadId); emit('statusKnown', true) } catch (error) { emit('statusKnown', false); throw error } }) }
+async function refresh() { await run(async () => { try { await refreshControl(props.threadId); notice.value = ''; setKnown(true) } catch (error) { setKnown(false); throw error } }) }
 async function takeover(stop: boolean) {
   if (stop && !window.confirm('停止会保留已经完成的文件修改，不能撤销已执行操作。确认停止当前任务并接管？')) return
   await run(async () => { await claimControl(props.threadId, true, stop); notice.value = stop ? '任务已确认停止。草稿尚未发送。' : '已取得控制权。草稿尚未发送。'; emit('acquired') })
@@ -60,11 +67,11 @@ let timer: ReturnType<typeof setInterval> | undefined
 let generation = 0
 let polling = false
 watch(() => props.threadId, (threadId, previous) => {
-  generation++; notice.value = ''; clearInterval(timer)
+  generation++; notice.value = ''; expanded.value = false; clearInterval(timer)
   if (previous && conversationStates[previous]?.proof) void releaseControl(previous).catch(() => undefined)
   if (!threadId) return
-  emit('statusKnown', false)
-  void refreshControl(threadId).then(() => { if (props.threadId === threadId) emit('statusKnown', true) }).catch((error) => { if (props.threadId === threadId) { notice.value = error.message; emit('statusKnown', false) } })
+  setKnown(false)
+  void refreshControl(threadId).then(() => { if (props.threadId === threadId) setKnown(true) }).catch((error) => { if (props.threadId === threadId) { notice.value = error.message; setKnown(false) } })
   const current = generation
   timer = setInterval(async () => {
     if (polling || busy.value || document.hidden || current !== generation) return
@@ -72,24 +79,30 @@ watch(() => props.threadId, (threadId, previous) => {
     try {
       if (conversationStates[threadId]?.proof) await heartbeatControl(threadId)
       else await refreshControl(threadId)
-      if (current === generation) emit('statusKnown', true)
+      if (current === generation) setKnown(true)
     } catch (error) {
-      try { await refreshControl(threadId); if (current === generation) emit('statusKnown', true) } catch { if (current === generation) { notice.value = error instanceof Error ? error.message : '正在重新连接，请刷新。'; emit('statusKnown', false) } }
+      try { await refreshControl(threadId); if (current === generation) setKnown(true) } catch { if (current === generation) { notice.value = error instanceof Error ? error.message : '正在重新连接，请刷新。'; setKnown(false) } }
     } finally { polling = false }
   }, 5000)
 }, { immediate: true })
 onBeforeUnmount(() => { generation++; clearInterval(timer); if (conversationStates[props.threadId]?.proof) void releaseControl(props.threadId).catch(() => undefined) })
 </script>
 <style scoped>
-.control-bar { flex-shrink: 0; margin: 6px 16px 10px; padding: 10px 12px; border: 1px solid rgb(128 128 128 / 30%); border-radius: 12px; color: inherit; font-size: 12px; background: rgb(128 128 128 / 6%); }
-.control-summary { display: flex; align-items: center; gap: 7px; line-height: 1.5; }
+.control-bar { min-width: 0; max-width: 100%; color: inherit; font-size: 12px; }
+.control-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 28px; padding: 2px 0; cursor: pointer; line-height: 1.5; list-style: none; }
+.control-summary::-webkit-details-marker { display: none; }
+.control-summary:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 4px; }
+.control-toggle-label, .control-hint { opacity: .75; }
+.control-chevron { transition: transform .15s; }
+.control-bar[open] > .control-summary .control-chevron { transform: rotate(180deg); }
 .control-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: #a1a1aa; }
 .control-dot.owned { background: #22c55e; } .control-dot.blocked { background: #eab308; }
-.control-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-button, summary { border: 1px solid rgb(128 128 128 / 30%); border-radius: 7px; padding: 5px 8px; color: inherit; background: transparent; cursor: pointer; font: inherit; }
+.control-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px; padding: 6px 0; border-top: 1px solid rgb(128 128 128 / 20%); }
+button, .control-help > summary { border: 1px solid rgb(128 128 128 / 30%); border-radius: 7px; padding: 5px 8px; color: inherit; background: transparent; cursor: pointer; font: inherit; }
 button:disabled { opacity: .5; cursor: default; } button:hover:enabled { background: rgb(128 128 128 / 12%); }
-details { min-width: 0; flex: 0 0 auto; max-width: 100%; } summary { width: max-content; } details[open] { flex-basis: 100%; }
-details p, .control-notice { line-height: 1.65; margin: 8px 0 0; overflow-wrap: anywhere; }
-details button { margin: 8px 6px 0 0; } .control-notice { color: inherit; }
-@media (max-width: 480px) { .control-bar { margin: 4px 10px 8px; padding: 8px 10px; } }
+.control-help { min-width: 0; flex: 0 0 auto; max-width: 100%; } .control-help > summary { width: max-content; } .control-help[open] { flex-basis: 100%; }
+.control-help p, .control-notice { line-height: 1.65; margin: 6px 0 0; overflow-wrap: anywhere; }
+.control-help button { margin: 8px 6px 0 0; } .control-notice { color: inherit; }
+@media (max-width: 480px) { .control-bar { flex-basis: 100%; } .control-summary { min-height: 28px; } }
+@media (prefers-reduced-motion: reduce) { .control-chevron { transition: none; } }
 </style>

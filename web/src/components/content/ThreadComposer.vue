@@ -671,7 +671,7 @@ const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.tab-draft.v2.'
 let lastActiveThreadId = ''
 
-const reasoningOptions = computed(() => (modelCapabilities[props.selectedModel]?.efforts ?? []).map(value => ({ value, label: effortLabels[value] ?? value })))
+const reasoningOptions = computed(() => (modelCapabilities[props.selectedModel]?.efforts ?? []).map(value => ({ value, label: t(effortLabels[value] ?? value) })))
 watch(() => [props.selectedModel, props.selectedReasoningEffort, reasoningOptions.value] as const, () => {
   const cap = modelCapabilities[props.selectedModel]
   if (cap && !cap.efforts.includes(props.selectedReasoningEffort as ReasoningEffort)) emit('update:selected-reasoning-effort', cap.efforts.includes(cap.defaultEffort) ? cap.defaultEffort : cap.efforts[0] ?? '')

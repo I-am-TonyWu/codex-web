@@ -84,7 +84,7 @@
             :local-project-ids="workspaceRootsState?.localProjects?.map(project => project.id)"
             :project-git-repo-by-name="projectGitRepoByName"
             :project-cwd-by-name="projectCwdByName"
-            v-if="!isSidebarCollapsed"
+            v-show="!isSidebarCollapsed"
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
             :is-thread-list-fully-loaded="isThreadListFullyLoaded"
             :search-query="sidebarSearchQuery"
@@ -103,6 +103,7 @@
             @copy-thread-chat="onCopyThreadChat"
             @automations-changed="onAutomationsChanged"
             @thread-project-changed="refreshWorkspaceProjects"
+            @thread-menu-change="openThreadMenuId = $event"
             @import-project="onChooseProjectImportZip"
             @start-new-chat="onStartProjectlessNewChat" />
         </div>
@@ -147,6 +148,14 @@
                   menu-align="end"
                   @update:model-value="setUiLanguage($event as 'en' | 'zh-CN')"
                 />
+              </div>
+              <div class="sidebar-settings-row sidebar-font-size-row">
+                <span class="sidebar-settings-label">{{ t('Font size') }}</span>
+                <div class="sidebar-font-size-controls" :aria-label="t('Font size')">
+                  <button type="button" :disabled="!canDecreaseFont" :aria-label="t('Decrease font size')" :title="t('Decrease font size')" @click="decreaseFont">A−</button>
+                  <button type="button" class="sidebar-font-size-reset" :aria-label="t('Reset font size')" :title="t('Reset font size')" @click="resetFont">{{ fontScale }}%</button>
+                  <button type="button" :disabled="!canIncreaseFont" :aria-label="t('Increase font size')" :title="t('Increase font size')" @click="increaseFont">A+</button>
+                </div>
               </div>
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.chatWidth" @click="cycleChatWidth">
                 <span class="sidebar-settings-label">{{ t('Chat width') }}</span>
@@ -242,6 +251,14 @@
             <span v-else-if="isAutomationsRoute" class="skills-route-header-icon automations-route-header-icon" aria-hidden="true">
               <IconTablerBolt />
             </span>
+          </template>
+          <template #title-actions>
+            <button v-if="route.name === 'thread' && selectedThread" type="button"
+              class="content-header-thread-menu" :data-open="openThreadMenuId === selectedThreadId"
+              :aria-label="t('Thread options')" :title="t('Thread options')" aria-haspopup="true"
+              :aria-expanded="openThreadMenuId === selectedThreadId" @click.stop="onHeaderThreadMenu">
+              <IconTablerDots />
+            </button>
           </template>
           <template #actions>
             <ComposerDropdown
@@ -861,6 +878,8 @@ import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
 import { useMobile } from './composables/useMobile'
 import { useUiLanguage } from './composables/useUiLanguage'
+import { useUiFontSize } from './composables/useUiFontSize'
+import IconTablerDots from './components/icons/IconTablerDots.vue'
 import { useFeedbackDiagnostics } from './composables/useFeedbackDiagnostics'
 import {
   clearThreadGoal,
@@ -893,7 +912,7 @@ import {
   searchThreads,
   setThreadGoal,
 } from './api/codexGateway'
-import type { ReasoningEffort, SpeedMode, UiServerRequest, UiServerRequestReply, UiThreadAutomation, UiThreadTokenUsage } from './types/codex'
+import type { ReasoningEffort, SpeedMode, UiServerRequest, UiServerRequestReply, UiThread, UiThreadAutomation, UiThreadTokenUsage } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, ThreadGoal, ThreadGoalStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
@@ -905,6 +924,8 @@ const ReviewPane = defineAsyncComponent(() => import('./components/content/Revie
 const DirectoryHub = defineAsyncComponent(() => import('./components/content/DirectoryHub.vue'))
 const AutomationsPanel = defineAsyncComponent(() => import('./components/content/AutomationsPanel.vue'))
 const { t, uiLanguage, uiLanguageOptions, setUiLanguage } = useUiLanguage()
+const { fontScale, canDecreaseFont, canIncreaseFont, decreaseFont, increaseFont, resetFont } = useUiFontSize()
+const openThreadMenuId = ref('')
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const TERMINAL_QUICK_COMMAND_STORAGE_KEY = 'codex-web-local.terminal-quick-commands.v1'
@@ -1150,6 +1171,8 @@ const route = useRoute()
 const router = useRouter()
 const { isMobile } = useMobile()
 type SidebarThreadTreeExposed = {
+  toggleThreadMenuFromHeader: (thread: UiThread, anchor: HTMLElement) => void
+  closeThreadMenu: () => void
   openAutomationEditorFromPanel: (payload: AutomationEditRequest) => void
   openAutomationCreatorFromPanel: () => void
 }
@@ -1163,6 +1186,12 @@ type AutomationEditRequest = {
 }
 const sidebarThreadTreeRef = ref<SidebarThreadTreeExposed | null>(null)
 const automationsPanelRef = ref<AutomationsPanelExposed | null>(null)
+function onHeaderThreadMenu(event: MouseEvent): void {
+  if (selectedThread.value && event.currentTarget instanceof HTMLElement) {
+    sidebarThreadTreeRef.value?.toggleThreadMenuFromHeader(selectedThread.value, event.currentTarget)
+  }
+}
+watch(selectedThreadId, () => { sidebarThreadTreeRef.value?.closeThreadMenu(); openThreadMenuId.value = '' })
 const {
   buildFeedbackMailto,
   feedbackMailtoBase,
@@ -4136,6 +4165,23 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   @apply flex-1 min-h-0 overflow-y-auto py-4 px-2 flex flex-col gap-2;
 }
 
+.content-header-thread-menu {
+  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border-0 bg-transparent text-zinc-600 opacity-0 transition-opacity hover:bg-zinc-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-blue-500;
+}
+.content-header-thread-menu svg { @apply h-4 w-4; }
+:deep(.content-header:hover) .content-header-thread-menu,
+.content-header-thread-menu[data-open="true"] { opacity: 1; }
+:global(:root.dark .content-header-thread-menu) { @apply text-zinc-300 hover:bg-zinc-800; }
+@media (hover: none) { .content-header-thread-menu { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .content-header-thread-menu { transition: none; } }
+.sidebar-font-size-controls { @apply flex shrink-0 items-center gap-1; }
+.sidebar-font-size-row { @apply flex-wrap gap-2 cursor-default; }
+.sidebar-font-size-row .sidebar-settings-label { @apply shrink-0; }
+.sidebar-font-size-row .sidebar-font-size-controls { @apply ml-auto; }
+.sidebar-font-size-controls button { @apply min-h-8 min-w-8 rounded-md border border-zinc-300 px-1.5 text-sm text-zinc-700 hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-default focus-visible:outline-2 focus-visible:outline-blue-500; }
+:global(:root.dark .sidebar-font-size-controls button) { @apply border-zinc-600 text-zinc-200 hover:bg-zinc-700; }
+.sidebar-font-size-reset { @apply min-w-12 tabular-nums; }
+
 .content-root {
   @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-hidden bg-white;
 }
@@ -4211,7 +4257,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-skills-link-subtitle {
-  @apply truncate text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500;
+  @apply truncate text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600;
 }
 
 .sidebar-thread-controls-header-host {

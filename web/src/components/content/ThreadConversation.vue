@@ -626,35 +626,35 @@
                   v-if="showEditMessageButton(message)"
                   type="button"
                   class="message-edit-button"
-                  aria-label="Edit this message"
-                  title="Edit this message"
+                  :aria-label="t('Edit this message')"
+                  :title="t('Edit this message')"
                   @click="editMessage(message.id)"
                 >
                   <IconTablerFilePencil class="icon-svg message-edit-icon" />
-                  <span class="message-edit-label">Edit message</span>
+                  <span class="message-edit-label">{{ t('Edit message') }}</span>
                 </button>
                 <button
                   v-if="showForkResponseButton(message)"
                   type="button"
                   class="message-fork-button"
-                  aria-label="Fork thread from this response"
-                  title="Fork thread from this response"
+                  :aria-label="t('Fork thread from this response')"
+                  :title="t('Fork thread from this response')"
                   @click="forkResponse(message.id)"
                 >
                   <IconTablerGitFork class="icon-svg message-fork-icon" />
-                  <span class="message-fork-label">Fork</span>
+                  <span class="message-fork-label">{{ t('Fork') }}</span>
                 </button>
                 <button
                   v-if="showCopyResponseButton(message)"
                   type="button"
                   class="message-copy-button"
                   :data-copied="copiedResponseAnchorId === message.id"
-                  :aria-label="copiedResponseAnchorId === message.id ? 'Response copied' : 'Copy response'"
-                  :title="copiedResponseAnchorId === message.id ? 'Response copied' : 'Copy response'"
+                  :aria-label="copiedResponseAnchorId === message.id ? t('Response copied') : t('Copy response')"
+                  :title="copiedResponseAnchorId === message.id ? t('Response copied') : t('Copy response')"
                   @click="copyResponse(message.id)"
                 >
                   <IconTablerCopy class="icon-svg message-copy-icon" />
-                  <span class="message-copy-label">{{ copiedResponseAnchorId === message.id ? 'Copied' : 'Copy' }}</span>
+                  <span class="message-copy-label">{{ copiedResponseAnchorId === message.id ? t('Copied') : t('Copy') }}</span>
                 </button>
               </div>
             </article>
@@ -718,10 +718,10 @@
 
     <div v-if="modalImageUrl.length > 0" class="image-modal-backdrop" @click="closeImageModal">
       <div class="image-modal-content" @click.stop>
-        <button class="image-modal-close" type="button" aria-label="Close image preview" @click="closeImageModal">
+        <button class="image-modal-close" type="button" :aria-label="t('Close image preview')" @click="closeImageModal">
           <IconTablerX class="icon-svg" />
         </button>
-        <img class="image-modal-image" :src="modalImageUrl" alt="Expanded message image" />
+        <img class="image-modal-image" :src="modalImageUrl" :alt="t('Expanded message image')" />
       </div>
     </div>
 
@@ -874,6 +874,7 @@ import { updateThreadFileChanges } from '../../api/codexGateway'
 import { isThreadWriterConflict } from '../../api/codexErrors'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import { copyTextToClipboard, copyTextWithSelectionFallback } from '../../utils/clipboard'
 import MermaidDiagram from './MermaidDiagram.vue'
 import ConversationControlBar from './ConversationControlBar.vue'
@@ -907,6 +908,7 @@ const fileLinkContextMenuY = ref(0)
 const fileLinkContextBrowseUrl = ref('')
 const fileLinkContextEditUrl = ref('')
 const { isMobile } = useMobile()
+const { t } = useUiLanguage()
 const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
 const feedbackMailto = feedbackMailtoBase()
 
@@ -4410,9 +4412,9 @@ onBeforeUnmount(() => {
 @reference "tailwindcss";
 
 
-.conversation-status-dock { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 14px; width: calc(100% - 48px); max-width: var(--chat-column-max, 45rem); max-height: 45%; overflow-y: auto; margin: auto auto 0; padding: 5px 0; color: var(--activity-muted, #64748b); font-size: 12px; }
+.conversation-status-dock { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 14px; width: calc(100% - 48px); max-width: var(--chat-column-max, 45rem); max-height: 45%; overflow-y: auto; margin: auto auto 0; padding: 5px 0; color: var(--activity-muted, #64748b); font-size: 0.75rem; }
 .conversation-status-dock :deep(.control-bar[open]) { flex-basis: 100%; }
-.task-status-bar { min-width: 0; flex: 1 1 240px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; }
+.task-status-bar { min-width: 0; flex: 1 1 240px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; font-size: 0.75rem; }
 .task-status-copy { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; line-height: 1.5; }
 .task-status-copy strong { font-weight: 600; }
 .task-status-detail { color: var(--activity-muted, #64748b); }

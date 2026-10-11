@@ -88,11 +88,11 @@ watch(() => props.threadId, (threadId, previous) => {
 onBeforeUnmount(() => { generation++; clearInterval(timer); if (conversationStates[props.threadId]?.proof) void releaseControl(props.threadId).catch(() => undefined) })
 </script>
 <style scoped>
-.control-bar { min-width: 0; max-width: 100%; color: inherit; font-size: 12px; }
+.control-bar { min-width: 0; max-width: 100%; color: inherit; font-size: 0.75rem; }
 .control-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 28px; padding: 2px 0; cursor: pointer; line-height: 1.5; list-style: none; }
 .control-summary::-webkit-details-marker { display: none; }
 .control-summary:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 4px; }
-.control-toggle-label, .control-hint { opacity: .75; }
+.control-toggle-label, .control-hint { opacity: 1; }
 .control-chevron { transition: transform .15s; }
 .control-bar[open] > .control-summary .control-chevron { transform: rotate(180deg); }
 .control-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: #a1a1aa; }
@@ -101,7 +101,7 @@ onBeforeUnmount(() => { generation++; clearInterval(timer); if (conversationStat
 button, .control-help > summary { border: 1px solid rgb(128 128 128 / 30%); border-radius: 7px; padding: 5px 8px; color: inherit; background: transparent; cursor: pointer; font: inherit; }
 button:disabled { opacity: .5; cursor: default; } button:hover:enabled { background: rgb(128 128 128 / 12%); }
 .control-help { min-width: 0; flex: 0 0 auto; max-width: 100%; } .control-help > summary { width: max-content; } .control-help[open] { flex-basis: 100%; }
-.control-help p, .control-notice { line-height: 1.65; margin: 6px 0 0; overflow-wrap: anywhere; }
+.control-help p, .control-notice { font-size: 0.8125rem; line-height: 1.65; margin: 6px 0 0; overflow-wrap: anywhere; }
 .control-help button { margin: 8px 6px 0 0; } .control-notice { color: inherit; }
 @media (max-width: 480px) { .control-bar { flex-basis: 100%; } .control-summary { min-height: 28px; } }
 @media (prefers-reduced-motion: reduce) { .control-chevron { transition: none; } }

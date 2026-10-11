@@ -2,7 +2,7 @@
   <div class="desktop-layout" :class="{ 'is-mobile': isMobile }" :style="layoutStyle">
     <Teleport v-if="isMobile" to="body">
       <Transition name="drawer">
-        <div v-if="!isSidebarCollapsed" class="mobile-drawer-backdrop" @click="$emit('close-sidebar')">
+        <div v-show="!isSidebarCollapsed" class="mobile-drawer-backdrop" @click="$emit('close-sidebar')">
           <aside class="mobile-drawer" @click.stop>
             <slot name="sidebar" />
           </aside>
@@ -11,7 +11,7 @@
     </Teleport>
 
     <template v-if="!isMobile">
-      <aside v-if="!isSidebarCollapsed" class="desktop-sidebar">
+      <aside v-show="!isSidebarCollapsed" class="desktop-sidebar">
         <slot name="sidebar" />
       </aside>
       <button

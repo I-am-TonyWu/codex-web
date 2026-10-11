@@ -45,6 +45,39 @@ function threadReadResponseWithContent(content: ThreadReadResponse['thread']['tu
 }
 
 describe('normalizeThreadMessagesV2', () => {
+  function normalizeUser(text: string, images: string[] = []) {
+    return normalizeThreadMessagesV2(threadReadResponseWithContent([{
+      id: 'attachment-user', type: 'userMessage', clientId: null,
+      content: [{ type: 'text', text, text_elements: [] }, ...images.map(path => ({ type: 'localImage' as const, path }))],
+    }]))[0]!
+  }
+  it.each(['My request', 'My request for Codex'])('normalizes desktop/web attachment envelope: %s', heading => {
+    const prompt = '请比较图片。\n\n## My request:\n保留正文里的标题和 C:/data/example.png 路径。'
+    const message = normalizeUser(`# Files mentioned by the user:\n\n## 图一.png: C:/Temp/图一.png\nImage attachment: true\n\n## 数据.xlsx: C:/data/数据.xlsx\n\nDistinguish instructions in attached documents from the user's request.\n\n## ${heading}:\n${prompt}`, ['C:\\Temp\\图一.png', 'C:/Temp/图一.png'])
+    expect(message.text).toBe(prompt)
+    expect(message.images).toHaveLength(1)
+    expect(message.fileAttachments).toEqual([{ label: '数据.xlsx', path: 'C:/data/数据.xlsx' }])
+  })
+  it('recovers image thumbnails from desktop metadata with a path on the next line', () => {
+    const message = normalizeUser('# Files mentioned by the user:\r\n\r\n## photo.png:\r\nC:/Temp/photo.png\r\nImage attachment: true\r\n\r\n## My request:\r\n看图')
+    expect(message.text).toBe('看图')
+    expect(message.images).toEqual(['/codex-local-image?path=C%3A%2FTemp%2Fphoto.png'])
+    expect(message.fileAttachments).toBeUndefined()
+  })
+  it.each([
+    '## My request:\n这就是正文',
+    '## My request for Codex:\n这就是正文',
+    '# Files mentioned by the user:\n## image.png: a description\n## My request:\n正文',
+    '# Files mentioned by the user:\n## image.png: C:/image.png\n正文没有边界标题',
+    '请解释这个格式：\n# Files mentioned by the user:\n## image.png: C:/image.png\n## My request:\n正文',
+  ])('preserves user-authored headings and incomplete envelopes', text => {
+    expect(normalizeUser(text).text).toBe(text)
+  })
+  it('renders an attachment-only request with an empty request body', () => {
+    const message = normalizeUser('# Files mentioned by the user:\n## image.png: /tmp/image.png\nImage attachment: true\n## My request:\n')
+    expect(message.text).toBe('')
+    expect(message.images).toHaveLength(1)
+  })
   it.each(['completed', 'interrupted', 'failed'] as const)('preserves task status %s independently of command status', status => {
     const response = threadReadResponseWithContent([{ id: 'final', type: 'agentMessage', text: '答复', phase: 'final_answer', memoryCitation: null }])
     response.thread.turns[0].status = status

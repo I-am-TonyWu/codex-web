@@ -80,7 +80,7 @@
                 <button
                   class="thread-menu-trigger"
                   type="button"
-                  title="thread_menu"
+                  :title="t('Thread options')" :aria-label="t('Thread options')"
                   @click.stop="toggleThreadMenu(thread.id)"
                 >
                   <IconTablerDots class="thread-icon" />
@@ -255,7 +255,7 @@
               <button
                 class="thread-menu-trigger"
                 type="button"
-                title="thread_menu"
+                :title="t('Thread options')" :aria-label="t('Thread options')"
                 @click.stop="toggleThreadMenu(thread.id)"
               >
                 <IconTablerDots class="thread-icon" />
@@ -339,13 +339,13 @@
                   >
                     <template v-if="projectMenuMode === 'actions'">
                       <button class="project-menu-item" type="button" @click="onBrowseProjectFiles(group.projectName)">
-                        Browse files
+                        {{ t('Browse files') }}
                       </button>
                       <button class="project-menu-item" type="button" @click="onSaveProject(group.projectName)">
-                        Export Project
+                        {{ t('Export Project') }}
                       </button>
                       <button class="project-menu-item" type="button" @click="openProjectAutomationDialog(group.projectName)">
-                        {{ projectHasAutomation(group.projectName) ? 'Manage automations…' : 'Add automation…' }}
+                        {{ projectHasAutomation(group.projectName) ? t('Manage automations…') : t('Add automation…') }}
                       </button>
                       <button
                         v-if="projectGitRepoByName[group.projectName]"
@@ -460,7 +460,7 @@
                     <button
                       class="thread-menu-trigger"
                       type="button"
-                      title="thread_menu"
+                      :title="t('Thread options')" :aria-label="t('Thread options')"
                       @click.stop="toggleThreadMenu(thread.id)"
                     >
                       <IconTablerDots class="thread-icon" />
@@ -589,7 +589,7 @@
                 <button
                   class="thread-menu-trigger"
                   type="button"
-                  title="thread_menu"
+                  :title="t('Thread options')" :aria-label="t('Thread options')"
                   @click.stop="toggleThreadMenu(thread.id)"
                 >
                   <IconTablerDots class="thread-icon" />
@@ -615,6 +615,8 @@
         v-if="openThreadMenuThread"
         ref="openThreadMenuPanelRef"
         class="thread-menu-panel thread-menu-panel-fixed"
+        :aria-label="t('Thread options')"
+        @keydown.esc.prevent="externalThreadMenuAnchor?.focus(); closeThreadMenu()"
         :style="openThreadMenuStyle"
         :data-open-direction="getThreadMenuDirection(openThreadMenuThread.id)"
         @click.stop
@@ -623,31 +625,31 @@
           {{ t('Project') }} <span aria-hidden="true">›</span>
         </button>
         <button class="thread-menu-item" type="button" @click="openAutomationDialog(openThreadMenuThread.id)">
-          {{ threadHasAutomation(openThreadMenuThread.id) ? 'Manage automations…' : 'Add automation…' }}
+          {{ threadHasAutomation(openThreadMenuThread.id) ? t('Manage automations…') : t('Add automation…') }}
         </button>
         <button class="thread-menu-item" type="button" @click="onBrowseThreadFiles(openThreadMenuThread.id)">
-          Browse files
+          {{ t('Browse files') }}
         </button>
         <button class="thread-menu-item" type="button" @click="onSaveThreadProject(openThreadMenuThread.id)">
-          Export Project
+          {{ t('Export Project') }}
         </button>
         <button class="thread-menu-item" type="button" @click="onCopyThreadPath(openThreadMenuThread.id)">
-          Copy path
+          {{ t('Copy path') }}
         </button>
         <button
           class="thread-menu-item"
           type="button"
           :disabled="openThreadMenuThread.id !== selectedThreadId"
-          :title="openThreadMenuThread.id === selectedThreadId ? 'Copy chat' : 'Open this chat before copying'"
+          :title="openThreadMenuThread.id === selectedThreadId ? t('Copy chat') : t('Open this chat before copying')"
           @click="onCopyThreadChat(openThreadMenuThread.id)"
         >
-          Copy chat
+          {{ t('Copy chat') }}
         </button>
         <button class="thread-menu-item" type="button" @click="onForkThread(openThreadMenuThread.id)">
-          Create chat fork
+          {{ t('Create chat fork') }}
         </button>
         <button class="thread-menu-item" type="button" @click="onTogglePinFromMenu(openThreadMenuThread.id)">
-          {{ isPinned(openThreadMenuThread.id) ? 'Unpin thread' : 'Pin thread' }}
+          {{ isPinned(openThreadMenuThread.id) ? t('Unpin thread') : t('Pin thread') }}
         </button>
         <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
           {{ t('Rename thread') }}
@@ -682,15 +684,15 @@
 
     <Teleport to="body">
       <div v-if="renameThreadDialogVisible" class="rename-thread-overlay" @click.self="closeRenameThreadDialog">
-        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="Thread title">
+        <div class="rename-thread-panel" role="dialog" aria-modal="true" :aria-label="t('Thread title')">
           <h3 class="rename-thread-title">{{ t('Rename thread') }}</h3>
-          <p class="rename-thread-subtitle">Make it short and recognizable.</p>
+          <p class="rename-thread-subtitle">{{ t('Make it short and recognizable.') }}</p>
           <input
             ref="renameThreadInputRef"
             v-model="renameThreadDraft"
             class="rename-thread-input"
             type="text"
-            placeholder="Add title..."
+            :placeholder="t('Add title...')"
             @keydown.enter.prevent="submitRenameThread"
             @keydown.esc.prevent="closeRenameThreadDialog"
           />
@@ -708,16 +710,16 @@
           <h3 class="rename-thread-title">{{ deleteThreadHasAutomation ? 'Archive chat and remove automations?' : 'Delete thread?' }}</h3>
           <p class="rename-thread-subtitle">
             <template v-if="deleteThreadHasAutomation">
-              This will archive the thread "{{ deleteThreadTitle }}" and remove the attached heartbeat automations.
+              {{ t('Archive "{title}" and remove the attached heartbeat automations.', { title: deleteThreadTitle }) }}
             </template>
             <template v-else>
-              This will archive the thread "{{ deleteThreadTitle }}". You can find it later in archived threads.
+              {{ t('Archive "{title}". You can find it later in archived threads.', { title: deleteThreadTitle }) }}
             </template>
           </p>
           <div class="rename-thread-actions">
-            <button class="rename-thread-button" type="button" @click="closeDeleteThreadDialog">Cancel</button>
+            <button class="rename-thread-button" type="button" @click="closeDeleteThreadDialog">{{ t('Cancel') }}</button>
             <button class="rename-thread-button rename-thread-button-danger" type="button" @click="submitDeleteThread">
-              {{ deleteThreadHasAutomation ? 'Archive and remove' : 'Delete' }}
+              {{ deleteThreadHasAutomation ? t('Archive and remove') : t('Archive') }}
             </button>
           </div>
         </div>
@@ -974,6 +976,7 @@ const emit = defineEmits<{
   'import-project': []
   'automations-changed': []
   'thread-project-changed': []
+  'thread-menu-change': [threadId: string]
 }>()
 
 const threadProjectDialogId = ref('')
@@ -1073,6 +1076,8 @@ const inlineDeleteConfirmThreadId = ref('')
 const optimisticallyArchivedThreadIds = ref<string[]>([])
 const openProjectMenuId = ref('')
 const openThreadMenuId = ref('')
+const externalThreadMenuAnchor = ref<HTMLElement | null>(null)
+const externalThreadMenuThread = ref<UiThread | null>(null)
 const projectMenuDirectionById = ref<Record<string, MenuDirection>>({})
 const threadMenuDirectionById = ref<Record<string, MenuDirection>>({})
 const openThreadMenuStyle = ref<Record<string, string>>({})
@@ -1503,7 +1508,7 @@ const threadTimestampById = computed(() => {
 
 const openThreadMenuThread = computed(() => {
   const threadId = openThreadMenuId.value
-  return threadId ? (threadById.value.get(threadId) ?? null) : null
+  return threadId ? (threadById.value.get(threadId) ?? externalThreadMenuThread.value ?? null) : null
 })
 
 const pinnedThreads = computed(() =>
@@ -1843,9 +1848,28 @@ function isThreadMenuOpen(threadId: string): boolean {
 function closeThreadMenu(): void {
   openThreadMenuId.value = ''
   openThreadMenuStyle.value = {}
+  externalThreadMenuAnchor.value = null
+  externalThreadMenuThread.value = null
+}
+
+function toggleThreadMenuFromHeader(thread: UiThread, anchor: HTMLElement): void {
+  if (openThreadMenuId.value === thread.id && externalThreadMenuAnchor.value === anchor) { closeThreadMenu(); return }
+  closeThreadMenu()
+  closeProjectMenu()
+  isOrganizeMenuOpen.value = false
+  externalThreadMenuAnchor.value = anchor
+  externalThreadMenuThread.value = thread
+  openThreadMenuId.value = thread.id
+  nextTick(() => { updateOpenThreadMenuPlacement(thread.id); openThreadMenuPanelRef.value?.querySelector<HTMLButtonElement>('button')?.focus() })
+}
+
+function threadMenuAnchor(threadId: string): HTMLElement | undefined {
+  return externalThreadMenuAnchor.value ?? threadMenuWrapElementById.get(threadId)
 }
 
 function toggleThreadMenu(threadId: string): void {
+  externalThreadMenuAnchor.value = null
+  externalThreadMenuThread.value = null
   inlineDeleteConfirmThreadId.value = ''
   if (openThreadMenuId.value === threadId) {
     closeThreadMenu()
@@ -1862,6 +1886,8 @@ function toggleThreadMenu(threadId: string): void {
 
 function onThreadRowContextMenu(event: MouseEvent, threadId: string): void {
   event.preventDefault()
+  externalThreadMenuAnchor.value = null
+  externalThreadMenuThread.value = null
   inlineDeleteConfirmThreadId.value = ''
   openThreadMenuId.value = threadId
 }
@@ -2237,6 +2263,8 @@ function getProjectDisplayName(projectName: string): string {
 defineExpose({
   openAutomationEditorFromPanel,
   openAutomationCreatorFromPanel,
+  toggleThreadMenuFromHeader,
+  closeThreadMenu,
 })
 
 function isPathLikeProjectName(value: string): boolean {
@@ -2531,7 +2559,7 @@ function resolveMenuDirection(menuWrapElement: HTMLElement, panelHeight: number)
 }
 
 function updateThreadMenuDirection(threadId: string, panelHeight: number): MenuDirection {
-  const menuWrapElement = threadMenuWrapElementById.get(threadId)
+  const menuWrapElement = threadMenuAnchor(threadId)
   if (!menuWrapElement) return 'down'
 
   const direction = resolveMenuDirection(menuWrapElement, panelHeight)
@@ -2564,7 +2592,7 @@ function clamp(value: number, minValue: number, maxValue: number): number {
 }
 
 function updateOpenThreadMenuPlacement(threadId: string): void {
-  const menuWrapElement = threadMenuWrapElementById.get(threadId)
+  const menuWrapElement = threadMenuAnchor(threadId)
   if (!menuWrapElement) return
 
   const panelElement = openThreadMenuPanelRef.value
@@ -2622,7 +2650,7 @@ function isEventInsideOpenThreadMenu(event: Event): boolean {
   const threadId = openThreadMenuId.value
   if (!threadId) return false
 
-  const openMenuWrapElement = threadMenuWrapElementById.get(threadId)
+  const openMenuWrapElement = threadMenuAnchor(threadId)
   if (!openMenuWrapElement) return false
 
   const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : []
@@ -2651,8 +2679,7 @@ function onProjectMenuPointerDown(event: PointerEvent): void {
     }
   }
 
-  if (!openProjectMenuId.value) return
-  if (!isEventInsideOpenProjectMenu(event)) {
+  if (openProjectMenuId.value && !isEventInsideOpenProjectMenu(event)) {
     closeProjectMenu()
   }
 
@@ -3050,6 +3077,7 @@ watch(hasOpenDismissableMenu, (isOpen) => {
 })
 
 watch(openThreadMenuId, (threadId) => {
+  emit('thread-menu-change', threadId)
   if (!threadId) {
     unbindThreadMenuPositionListeners()
     return
@@ -3109,7 +3137,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-tree-header {
-  @apply text-sm font-normal text-zinc-500 select-none;
+  @apply text-sm font-normal text-zinc-600 select-none;
 }
 
 .chats-section-actions {
@@ -3339,7 +3367,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-time {
-  @apply block text-sm font-normal text-zinc-500;
+  @apply block text-sm font-normal text-zinc-600;
 }
 
 .thread-menu-wrap {

@@ -8,7 +8,6 @@ import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { stat, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import pkg from "./package.json";
 
 const IMAGE_CONTENT_TYPES: Record<string, string> = {
   ".avif": "image/avif",
@@ -76,7 +75,7 @@ function getWorktreeName(): string {
 }
 
 const worktreeName = getWorktreeName();
-const appVersion = typeof pkg.version === "string" ? pkg.version : "unknown";
+const appVersion = "1.4.4";
 const WS_UPGRADE_ATTACHED_KEY = "__codexBridgeWsAttached__";
 
 function readEnvValueFromFile(filePath: string, key: string): string {
@@ -105,7 +104,7 @@ const viteRollbackDebugFallback = resolveViteRollbackDebugFallback();
 export default defineConfig({
   define: {
     "import.meta.env.VITE_WORKTREE_NAME": JSON.stringify(worktreeName),
-    "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
+    "import.meta.env.VITE_APP_VERSION": JSON.stringify(process.env.CODEX_WEB_BUILD_VERSION || appVersion),
     "import.meta.env.VITE_ROLLBACK_DEBUG_FALLBACK": JSON.stringify(viteRollbackDebugFallback),
   },
   server: {

@@ -11,7 +11,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { createInterface } from 'node:readline'
 import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
-import { handleAccountRoutes } from './accountRoutes.js'
+import { isRemoteAccountMutation, remoteAccountReadParams, REMOTE_ACCOUNT_DISABLED_MESSAGE } from './remoteAccountPolicy.js'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
 import { recheckThreadWriter } from './threadWriterProbe.js'
@@ -21,7 +21,6 @@ import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js
 import { handleReviewRoutes } from './reviewGit.js'
 import { ExtensionCatalog } from './extensionCatalog.js'
 import { handleSkillsRoutes } from './skillsRoutes.js'
-import { TelegramThreadBridge } from './telegramThreadBridge.js'
 import {
   getRandomFreeKey,
   getFreeKeyCount,
@@ -32,14 +31,11 @@ import {
   FREE_MODE_STATE_FILE,
   OPENCODE_ZEN_DEFAULT_MODEL,
   OPENCODE_ZEN_PROVIDER_ID,
-  createDefaultOpenCodeZenFreeModeState,
   filterOpenCodeZenModelsForAuthState,
   getFreeModeConfigArgs,
   getFreeModeEnvVars,
   getProviderCompatibilityConfigArgs,
   shouldMarkOpenRouterKeyAsCustom,
-  shouldCreateDefaultFreeModeStateForMissingAuth,
-  shouldSuppressCommunityFreeModeForCodexAuth,
   type FreeModeState,
 } from './freeMode.js'
 import { handleOpenRouterProxyRequest } from './openRouterProxy.js'
@@ -667,6 +663,7 @@ async function sanitizeInlineUserContentBlock(
           ...record,
           type: 'imageView',
           path: localUrl,
+          imagePurpose: 'generated',
         }
       }
     }
@@ -4103,9 +4100,6 @@ type CodexAuth = {
   }
 }
 
-const CODEX_CHATGPT_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
-const DEFAULT_CODEX_REFRESH_TOKEN_URL = 'https://auth.openai.com/oauth/token'
-
 function decodeBase64UrlJson(value: string): Record<string, unknown> | null {
   try {
     const padded = `${value}${'='.repeat((4 - (value.length % 4)) % 4)}`
@@ -4136,103 +4130,23 @@ function extractChatgptTokenMetadata(accessToken: string | undefined): {
   }
 }
 
-function readTokenErrorMessage(payload: unknown, fallback: string): string {
-  const record = asRecord(payload)
-  const message = readNonEmptyString(record?.message)
-  if (message) return message
-  const error = record?.error
-  if (typeof error === 'string' && error.trim().length > 0) return error.trim()
-  const nestedError = asRecord(error)
-  return readNonEmptyString(nestedError?.message)
-    || readNonEmptyString(nestedError?.error_description)
-    || readNonEmptyString(record?.error_description)
-    || fallback
-}
-
-function readTokenResponseString(payload: Record<string, unknown> | null, ...keys: string[]): string | null {
-  if (!payload) return null
-  for (const key of keys) {
-    const value = readNonEmptyString(payload[key])
-    if (value) return value
-  }
-  return null
-}
-
+// Credentials are owned/refreshed by Windows Codex. Only copy its current access
+// token into our ephemeral app-server; never use the refresh token or write auth.json.
 export async function refreshChatgptAuthTokensForExternalAuth(
   params: ChatgptAuthTokensRefreshParams = {},
 ): Promise<ChatgptAuthTokensRefreshResponse> {
-  const authPath = getCodexAuthPath()
-  const raw = await readFile(authPath, 'utf8')
-  const auth = JSON.parse(raw) as CodexAuth
-  const currentRefreshToken = auth.tokens?.refresh_token?.trim() ?? ''
-  if (!currentRefreshToken) {
-    throw new Error('No ChatGPT refresh token is available. Please sign in again.')
-  }
-
-  const refreshUrl = process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE?.trim() || DEFAULT_CODEX_REFRESH_TOKEN_URL
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: currentRefreshToken,
-    client_id: CODEX_CHATGPT_CLIENT_ID,
-  })
-
-  const response = await fetch(refreshUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: body.toString(),
-    signal: AbortSignal.timeout(25_000),
-  })
-
-  const text = await response.text()
-  let payload: Record<string, unknown> | null = null
-  try {
-    payload = asRecord(JSON.parse(text))
-  } catch {
-    payload = null
-  }
-
-  if (!response.ok) {
-    throw new Error(readTokenErrorMessage(payload, `ChatGPT token refresh failed with HTTP ${String(response.status)}`))
-  }
-
-  const accessToken = readTokenResponseString(payload, 'access_token', 'accessToken')
-  if (!accessToken) {
-    throw new Error('ChatGPT token refresh response did not include an access token.')
-  }
-
-  const nextRefreshToken = readTokenResponseString(payload, 'refresh_token', 'refreshToken') ?? currentRefreshToken
-  const nextIdToken = readTokenResponseString(payload, 'id_token', 'idToken') ?? auth.tokens?.id_token
+  const auth = JSON.parse(await readFile(getCodexAuthPath(), 'utf8')) as CodexAuth
+  const accessToken = auth.tokens?.access_token?.trim() ?? ''
   const metadata = extractChatgptTokenMetadata(accessToken)
-  const chatgptAccountId =
-    metadata.chatgptAccountId
-    || readTokenResponseString(payload, 'chatgpt_account_id', 'chatgptAccountId')
-    || readNonEmptyString(params.previousAccountId)
-    || readNonEmptyString(auth.tokens?.account_id)
-  if (!chatgptAccountId) {
-    throw new Error('ChatGPT token refresh response did not include account metadata.')
+  const chatgptAccountId = metadata.chatgptAccountId || readNonEmptyString(auth.tokens?.account_id)
+  const claims = decodeJwtPayload(accessToken)
+  if (!accessToken || !chatgptAccountId || (typeof claims?.exp === 'number' && claims.exp <= Date.now() / 1000)) {
+    throw new Error('主机 Codex 登录已过期或不可用，请在 Windows Codex 客户端重新登录。网页不会修改主机登录。')
   }
-
-  const nextAuth: CodexAuth = {
-    ...auth,
-    auth_mode: auth.auth_mode || 'chatgpt',
-    last_refresh: Date.now(),
-    tokens: {
-      ...auth.tokens,
-      access_token: accessToken,
-      refresh_token: nextRefreshToken,
-      account_id: chatgptAccountId,
-      ...(nextIdToken ? { id_token: nextIdToken } : {}),
-    },
+  if (params.previousAccountId && params.previousAccountId !== chatgptAccountId) {
+    throw new Error('主机 Codex 已切换账户，请重新连接网页服务以读取主机当前登录。')
   }
-  await writeFile(authPath, JSON.stringify(nextAuth, null, 2), { encoding: 'utf8', mode: 0o600 })
-
-  return {
-    accessToken,
-    chatgptAccountId,
-    chatgptPlanType: metadata.chatgptPlanType,
-  }
+  return { accessToken, chatgptAccountId, chatgptPlanType: metadata.chatgptPlanType }
 }
 
 async function readCodexAuth(): Promise<{ accessToken: string; accountId?: string } | null> {
@@ -4401,18 +4315,9 @@ export async function writeFreeModeStateFile(statePath: string, state: FreeModeS
 }
 
 export function ensureDefaultFreeModeStateForMissingAuthSync(statePath: string): FreeModeState | null {
-  const current = readFreeModeStateSync(statePath)
-  const hasUsableCodexAuth = hasUsableCodexAuthSync()
-  if (shouldSuppressCommunityFreeModeForCodexAuth(current, hasUsableCodexAuth)) {
-    return null
-  }
-  const shouldCreateDefault = shouldCreateDefaultFreeModeStateForMissingAuth(current, hasUsableCodexAuth)
-  const hasExplicitModelProviderConfig = shouldCreateDefault && hasExplicitCodexModelProviderConfigSync()
-  if (hasExplicitModelProviderConfig || !shouldCreateDefault) {
-    return current
-  }
-
-  return createDefaultOpenCodeZenFreeModeState()
+  // Never silently fall back to another provider, or override a user's explicit
+  // selection just because native Codex is (un)authenticated.
+  return readFreeModeStateSync(statePath)
 }
 
 function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
@@ -5978,6 +5883,7 @@ class AppServerProcess {
   private readonly capturedItemsByThreadId = new Map<string, Map<string, CapturedItem>>()
   private readonly liveStateCache = new Map<string, { data: unknown; turnCount: number; sessionSize: number }>()
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
+  private hostAuthError = ''
   private activeConfigSignature = ''
   private readonly writerLifecycle = new ThreadWriterLifecycle()
   private readonly desktopBridge = new DesktopThreadBridge(event => this.emitNotification(event))
@@ -5992,7 +5898,7 @@ class AppServerProcess {
   }
 
   private buildAppServerConfig(): { args: string[]; env: Record<string, string> } {
-    const args = buildAppServerArgs()
+    const args = [...buildAppServerArgs(), '-c', 'cli_auth_credentials_store="ephemeral"']
     let extraEnv: Record<string, string> = {}
     const serverPort = parseInt(process.env.CODEXUI_SERVER_PORT ?? '', 10) || undefined
     args.push(...getProviderCompatibilityConfigArgs(serverPort))
@@ -6433,8 +6339,24 @@ class AppServerProcess {
     })
   }
 
+  private async seedHostAccessToken(): Promise<void> {
+    const state = readFreeModeStateSync(join(getCodexHomeDir(), FREE_MODE_STATE_FILE))
+    if (state?.enabled || !(await hasUsableCodexAuth())) return
+    try {
+      const tokens = await refreshChatgptAuthTokensForExternalAuth()
+      await this.call('account/login/start', { type: 'chatgptAuthTokens', ...tokens })
+      this.hostAuthError = ''
+    } catch (error) {
+      // An unavailable desktop login must never tear down local history/settings.
+      this.hostAuthError = getErrorMessage(error, '请在 Windows Codex 客户端检查登录状态。')
+    }
+  }
+
   private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return
+    if (this.initialized) {
+      if (this.hostAuthError) await this.seedHostAccessToken()
+      return
+    }
     if (this.initializePromise) {
       await this.initializePromise
       return
@@ -6448,11 +6370,10 @@ class AppServerProcess {
       capabilities: {
         experimentalApi: true,
       },
-    }).then(() => {
-      this.sendLine({
-        jsonrpc: '2.0',
-        method: 'initialized',
-      })
+    }).then(async () => {
+      this.sendLine({ jsonrpc: '2.0', method: 'initialized' })
+      // Internal stdio only; the browser cannot choose credentials or login type.
+      await this.seedHostAccessToken()
       this.initialized = true
     }).finally(() => {
       this.initializePromise = null
@@ -6464,6 +6385,9 @@ class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
+    if (this.hostAuthError && (method === 'account/rateLimits/read' || method === 'account/read')) {
+      throw new Error(this.hostAuthError)
+    }
     const threadId = this.extractThreadIdFromParams(params)
     if (method === 'codexui/thread/release' && threadId) {
       if (this.desktopBridge.has(threadId)) { this.desktopBridge.detach(threadId); return { released: false, desktopDetached: true } }
@@ -6556,8 +6480,19 @@ class AppServerProcess {
     return [...this.pendingServerRequests.values(), ...this.desktopBridge.listPending()]
   }
 
+  async hasActiveWork(): Promise<boolean> {
+    if (this.desktopBridge.hasActiveWork() || this.listPendingServerRequests().length) return true
+    if (!this.process) return false
+    const result = asRecord(await this.call('thread/loaded/list', {}))
+    for (const threadId of Array.isArray(result?.data) ? result.data : []) {
+      const read = asRecord(await this.call('thread/read', { threadId, includeTurns: false }))
+      if (!['idle', 'systemError'].includes(readNonEmptyString(asRecord(asRecord(read?.thread)?.status)?.type))) return true
+    }
+    return false
+  }
+
   dispose(): void {
-    this.desktopBridge.close()
+    this.desktopBridge.reset()
     if (!this.process) return
 
     const proc = this.process
@@ -6566,6 +6501,7 @@ class AppServerProcess {
     this.initialized = false
     this.initializePromise = null
     this.activeConfigSignature = ''
+    this.hostAuthError = ''
     this.readBuffer = ''
 
     const failure = new Error('codex app-server stopped')
@@ -6988,13 +6924,12 @@ type SharedBridgeState = {
   appServer: AppServerProcess
   terminalManager: ThreadTerminalManager
   methodCatalog: MethodCatalog
-  telegramBridge: TelegramThreadBridge
   backendQueueProcessor: BackendQueueProcessor
   control: ConversationControl
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'conversation-control-1.4.3.9'
+const SHARED_BRIDGE_VERSION = 'host-account-readonly-1.4.3.11'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -7042,11 +6977,6 @@ function getSharedBridgeState(): SharedBridgeState {
     methodCatalog: new MethodCatalog(),
     backendQueueProcessor,
     control,
-    telegramBridge: new TelegramThreadBridge(appServer, {
-      onChatSeen: (chatId) => {
-        void rememberTelegramChatId(chatId).catch(() => {})
-      },
-    }),
   }
   globalScope[SHARED_BRIDGE_KEY] = created
   return created
@@ -7129,7 +7059,7 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 }
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
-  const { appServer, extensions, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, control } = getSharedBridgeState()
+  const { appServer, extensions, terminalManager, methodCatalog, backendQueueProcessor, control } = getSharedBridgeState()
   let threadSearchIndex: ThreadSearchIndex | null = null
   let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
 
@@ -7147,15 +7077,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     }
     return threadSearchIndexPromise
   }
-  void readTelegramBridgeConfig()
-    .then((config) => {
-      if (!config.botToken) return
-      telegramBridge.configureToken(config.botToken)
-      telegramBridge.configureAllowedUserIds(config.allowedUserIds)
-      telegramBridge.start()
-    })
-    .catch(() => {})
-
   function scopeFor(req: IncomingMessage): string {
     const cookie = req.headers.cookie ?? ''
     const session = cookie.match(/(?:^|;\s*)(?:portal_session|CF_Authorization)=([^;]+)/)?.[1] ?? 'local'
@@ -7288,6 +7209,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (url.pathname.startsWith('/codex-api/free-mode')) {
+        if (req.method === 'POST') {
+          checkOrigin(req)
+          if (await appServer.hasActiveWork()) {
+            setJson(res, 409, { error: 'provider_busy', message: '有任务正在运行或等待确认，请结束任务后再切换提供方。主机登录不会改变。' })
+            return
+          }
+        }
+
         const statePath = join(getCodexHomeDir(), FREE_MODE_STATE_FILE)
 
         function readFreeModeState(): FreeModeState {
@@ -7385,7 +7314,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
                 ]
               }
               wireApi = 'responses'
-            } else {
+            } else if (state.enabled && (!state.provider || state.provider === 'openrouter')) {
               refreshFreeModelsInBackground()
             }
             setJson(res, 200, {
@@ -7481,7 +7410,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             if (current.provider && current.apiKey) {
               prevKeys[current.provider] = current.apiKey
             }
-            const resolvedKey = apiKey || prevKeys[providerType] || ''
+            const resolvedKey = apiKey || prevKeys[providerType] || (providerType === 'openrouter' ? getRandomFreeKey() : '') || ''
             if (resolvedKey) {
               prevKeys[providerType] = resolvedKey
             }
@@ -7516,7 +7445,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (await handleAccountRoutes(req, res, url, { appServer })) {
+      if (url.pathname === '/codex-api/accounts' || url.pathname.startsWith('/codex-api/accounts/')) {
+        setJson(res, 410, { error: 'account_management_disabled', message: REMOTE_ACCOUNT_DISABLED_MESSAGE })
         return
       }
 
@@ -7709,6 +7639,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 	          setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
 	          return
 	        }
+
+        if (isRemoteAccountMutation(body.method)) {
+          setJson(res, 403, { error: 'account_management_disabled', message: REMOTE_ACCOUNT_DISABLED_MESSAGE })
+          return
+        }
+        body.params = remoteAccountReadParams(body.method, body.params)
 
 	        if (body.method === 'generate-thread-title') {
 	          setJson(res, 200, { result: { title: '' } })
@@ -9360,49 +9296,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/telegram/configure-bot') {
-        const payload = asRecord(await readJsonBody(req))
-        const botToken = typeof payload?.botToken === 'string' ? payload.botToken.trim() : ''
-        const rawAllowedUserIds = Array.isArray(payload?.allowedUserIds) ? payload.allowedUserIds : []
-        if (!botToken) {
-          setJson(res, 400, { error: 'Missing botToken' })
-          return
-        }
-        const config = normalizeTelegramBridgeConfig({
-          botToken,
-          allowedUserIds: rawAllowedUserIds,
-        })
-        if (config.allowedUserIds.length === 0) {
-          setJson(res, 400, { error: 'At least one allowed Telegram user ID is required' })
-          return
-        }
-
-        telegramBridge.configureToken(config.botToken)
-        telegramBridge.configureAllowedUserIds(config.allowedUserIds)
-        telegramBridge.start()
-        const existingConfig = await readTelegramBridgeConfig()
-        await writeTelegramBridgeConfig({
-          botToken: config.botToken,
-          chatIds: existingConfig.chatIds,
-          allowedUserIds: config.allowedUserIds,
-        })
-        setJson(res, 200, { ok: true })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/telegram/config') {
-        const config = await readTelegramBridgeConfig()
-        setJson(res, 200, {
-          data: {
-            botToken: config.botToken,
-            allowedUserIds: config.allowedUserIds,
-          },
-        })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/telegram/status') {
-        setJson(res, 200, { data: telegramBridge.getStatus() })
+      if (url.pathname === '/codex-api/telegram' || url.pathname.startsWith('/codex-api/telegram/')) {
+        setJson(res, 410, { error: 'telegram_disabled', message: '此网页服务已移除 Telegram 功能。' })
         return
       }
 
@@ -9456,7 +9351,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
   middleware.dispose = () => {
     threadSearchIndex = null
-    telegramBridge.stop()
     terminalManager.dispose()
     backendQueueProcessor.dispose()
     appServer.dispose()

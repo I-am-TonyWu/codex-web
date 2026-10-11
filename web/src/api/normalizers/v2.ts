@@ -447,7 +447,7 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         role: 'assistant',
         text: '',
         images: [toLocalImageUrl(path)],
-        messageType: 'imageView',
+        messageType: (item as unknown as Record<string, unknown>).imagePurpose === 'generated' ? 'imageGeneration' : 'imageView',
       },
     ]
   }
@@ -463,7 +463,7 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
           role: 'assistant',
           text: '',
           images: [result],
-          messageType: 'imageView',
+          messageType: 'imageGeneration',
         },
       ]
     }
@@ -646,7 +646,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
     const items = Array.isArray(turn.items) ? turn.items : []
     for (const item of items) {
       for (const msg of toUiMessages(item)) {
-        messages.push({ ...msg, turnId, turnIndex })
+        messages.push({ ...msg, turnId, turnIndex, turnStatus: turn.status })
       }
     }
     const errorText = readTurnErrorText(turn)
@@ -657,6 +657,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
         role: 'system',
         text: errorText,
         messageType: 'turnError',
+        turnStatus: 'failed',
         turnId,
         turnIndex,
       })

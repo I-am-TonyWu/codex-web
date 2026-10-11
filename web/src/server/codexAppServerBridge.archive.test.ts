@@ -287,7 +287,7 @@ describe('writeWorkspaceRootsState', () => {
     try {
       await mkdir(canonicalRoot, { recursive: true })
       await mkdir(symlinkParent, { recursive: true })
-      await symlink(canonicalRoot, symlinkRoot)
+      await symlink(canonicalRoot, symlinkRoot, process.platform === 'win32' ? 'junction' : 'dir')
       await writeWorkspaceRootsState({
         order: [symlinkRoot, 'remote-project-id', canonicalRoot],
         labels: {
@@ -494,21 +494,20 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
 
       const info = await stat(statePath)
       expect(info.isFile()).toBe(true)
-      expect(info.mode & 0o777).toBe(0o600)
+      if (process.platform !== 'win32') expect(info.mode & 0o777).toBe(0o600)
     } finally {
       await rm(codexHome, { recursive: true, force: true })
     }
   })
 
-  it('uses OpenCode Zen as a runtime fallback without creating a state file', async () => {
+  it('keeps Codex selected without a host login or a saved provider choice', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-runtime-zen-'))
     const statePath = join(codexHome, 'webui-custom-providers.json')
     process.env.CODEX_HOME = codexHome
     try {
       const state = ensureDefaultFreeModeStateForMissingAuthSync(statePath)
 
-      expect(state?.enabled).toBe(true)
-      expect(state?.provider).toBe('opencode-zen')
+      expect(state).toBeNull()
       await expect(stat(statePath)).rejects.toThrow()
     } finally {
       await rm(codexHome, { recursive: true, force: true })
@@ -570,7 +569,7 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
     }
   })
 
-  it('ignores commented and nested model_provider keys when deciding the runtime fallback', async () => {
+  it('does not synthesize a provider for commented or nested model_provider keys', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-nested-provider-config-'))
     const statePath = join(codexHome, 'webui-custom-providers.json')
     process.env.CODEX_HOME = codexHome
@@ -584,8 +583,7 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
 
       const state = ensureDefaultFreeModeStateForMissingAuthSync(statePath)
 
-      expect(state?.enabled).toBe(true)
-      expect(state?.provider).toBe('opencode-zen')
+      expect(state).toBeNull()
       await expect(stat(statePath)).rejects.toThrow()
     } finally {
       await rm(codexHome, { recursive: true, force: true })
@@ -605,15 +603,14 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
 
       const state = ensureDefaultFreeModeStateForMissingAuthSync(statePath)
 
-      expect(state?.enabled).toBe(true)
-      expect(state?.provider).toBe('opencode-zen')
+      expect(state).toBeNull()
       await expect(stat(statePath)).rejects.toThrow()
     } finally {
       await rm(codexHome, { recursive: true, force: true })
     }
   })
 
-  it('ignores community provider state after Codex auth appears', async () => {
+  it('keeps an explicit community provider selection after Codex auth appears', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-auth-community-provider-'))
     const statePath = join(codexHome, 'webui-custom-providers.json')
     process.env.CODEX_HOME = codexHome
@@ -628,7 +625,7 @@ describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
         wireApi: 'responses',
       }))
 
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
+      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)?.provider).toBe('openrouter')
     } finally {
       await rm(codexHome, { recursive: true, force: true })
     }

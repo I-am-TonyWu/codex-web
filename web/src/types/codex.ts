@@ -221,6 +221,7 @@ export type UiMessage = {
   plan?: UiPlanData
   turnId?: string
   turnIndex?: number
+  turnStatus?: 'inProgress' | 'completed' | 'interrupted' | 'failed'
   isAutomationRun?: boolean
   automationDisplayName?: string | null
 }

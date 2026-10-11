@@ -1,16 +1,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildAppServerArgs } from './appServerRuntimeConfig.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
+import { resolveCodexCommand } from '../commandResolution.js'
+import { getSpawnInvocation } from '../utils/commandInvocation.js'
+import { cleanupAccountHome, trackAccountProcess } from './accountProcess.js'
 
 type AppServerLike = {
   rpc(method: string, params: unknown): Promise<unknown>
   listPendingServerRequests(): unknown[]
   dispose(): void
+  hasActiveWork?(): Promise<boolean>
 }
 
 type AccountRouteContext = {
@@ -86,6 +90,7 @@ type TokenMetadata = {
 type AccountInspection = {
   metadata: TokenMetadata
   quotaSnapshot: StoredRateLimitSnapshot | null
+  quotaError?: string
 }
 
 const ACCOUNT_QUOTA_REFRESH_TTL_MS = 5 * 60 * 1000
@@ -96,6 +101,7 @@ const LOGIN_CALLBACK_TIMEOUT_MS = 20 * 1000
 const LOGIN_AUTH_FILE_TIMEOUT_MS = 10 * 1000
 
 let backgroundRefreshPromise: Promise<void> | null = null
+let accountActionQueue: Promise<unknown> = Promise.resolve()
 let activeLogin: {
   proc: ChildProcessWithoutNullStreams
   loginUrl: string | null
@@ -104,6 +110,9 @@ let activeLogin: {
   exitCode: number | null
   exitSignal: NodeJS.Signals | null
   exitPromise: Promise<void>
+  home: string
+  stop: () => Promise<boolean>
+  expires: ReturnType<typeof setTimeout>
 } | null = null
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -129,9 +138,25 @@ function normalizeAccountUnavailableReason(value: unknown): AccountUnavailableRe
 }
 
 function setJson(res: ServerResponse, statusCode: number, payload: unknown): void {
-  res.statusCode = statusCode
+  // Application failures stay JSON across Cloudflare's 5xx error-page handling.
+  res.statusCode = statusCode >= 500 ? 200 : statusCode
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.end(JSON.stringify(payload))
+  res.setHeader('Cache-Control', 'no-store')
+  res.end(JSON.stringify(statusCode >= 500 ? { ok: false, ...asRecord(payload) } : payload))
+}
+
+function codexInvocation(args: string[]) {
+  const command = resolveCodexCommand()
+  if (!command) throw new Error('未找到可用的 Codex 程序，请先在主机打开 Codex 客户端。')
+  return getSpawnInvocation(command, args)
+}
+
+async function blockAccountChange(appServer: AppServerLike, res: ServerResponse) {
+  if (appServer.listPendingServerRequests().length || await appServer.hasActiveWork?.()) {
+    setJson(res, 409, { error: 'account_change_blocked', message: '请等待当前任务和审批结束后再切换登录账户。重新加载账户列表仍可使用。' })
+    return true
+  }
+  return false
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -360,7 +385,15 @@ async function readStoredAccountsState(): Promise<StoredAccountsState> {
 }
 
 async function writeStoredAccountsState(state: StoredAccountsState): Promise<void> {
-  await writeFile(getAccountsStatePath(), JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 })
+  await writeAccountFile(getAccountsStatePath(), JSON.stringify(state, null, 2))
+}
+
+async function writeAccountFile(path: string, raw: string): Promise<void> {
+  const staged = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(staged, raw, { encoding: 'utf8', mode: 0o600 })
+    await rename(staged, path)
+  } finally { await rm(staged, { force: true }).catch(() => undefined) }
 }
 
 function withUpsertedAccount(state: StoredAccountsState, nextEntry: StoredAccountEntry): StoredAccountsState {
@@ -598,7 +631,7 @@ function getSnapshotPath(storageId: string): string {
 async function writeSnapshot(storageId: string, raw: string): Promise<void> {
   const dir = join(getAccountsSnapshotRoot(), storageId)
   await mkdir(dir, { recursive: true, mode: 0o700 })
-  await writeFile(getSnapshotPath(storageId), raw, { encoding: 'utf8', mode: 0o600 })
+  await writeAccountFile(getSnapshotPath(storageId), raw)
 }
 
 async function removeSnapshot(storageId: string): Promise<void> {
@@ -608,6 +641,7 @@ async function removeSnapshot(storageId: string): Promise<void> {
 async function readRuntimeAccountMetadata(appServer: AppServerLike): Promise<TokenMetadata> {
   const payload = asRecord(await appServer.rpc('account/read', { refreshToken: false }))
   const account = asRecord(payload?.account)
+  if (!account) throw new Error('主机 Codex 尚未登录，现有账户快照已保留。')
   return {
     email: typeof account?.email === 'string' && account.email.trim().length > 0 ? account.email.trim() : null,
     userId: null,
@@ -617,11 +651,10 @@ async function readRuntimeAccountMetadata(appServer: AppServerLike): Promise<Tok
 
 async function validateSwitchedAccount(appServer: AppServerLike): Promise<AccountInspection> {
   const metadata = await readRuntimeAccountMetadata(appServer)
-  const quotaPayload = await callRpcWithRateLimitDecodeRecovery(appServer, 'account/rateLimits/read', null)
-  return {
-    metadata,
-    quotaSnapshot: pickCodexRateLimitSnapshot(quotaPayload),
-  }
+  try {
+    const quotaPayload = await callRpcWithRateLimitDecodeRecovery(appServer, 'account/rateLimits/read', null)
+    return { metadata, quotaSnapshot: pickCodexRateLimitSnapshot(quotaPayload) }
+  } catch { return { metadata, quotaSnapshot: null, quotaError: '额度暂时无法读取；登录账户仍然有效，可稍后重新加载。' } }
 }
 
 async function restoreActiveAuth(raw: string | null): Promise<void> {
@@ -630,7 +663,7 @@ async function restoreActiveAuth(raw: string | null): Promise<void> {
     await rm(path, { force: true })
     return
   }
-  await writeFile(path, raw, { encoding: 'utf8', mode: 0o600 })
+  await writeAccountFile(path, raw)
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -642,18 +675,21 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function withTemporaryCodexAppServer<T>(
+export async function withTemporaryCodexAppServer<T>(
   authRaw: string,
   run: (rpc: (method: string, params: unknown) => Promise<unknown>) => Promise<T>,
 ): Promise<T> {
+  const invocation = codexInvocation(buildAppServerArgs())
   const tempCodexHome = await mkdtemp(join(tmpdir(), 'codexui-account-'))
   const authPath = join(tempCodexHome, 'auth.json')
   await writeFile(authPath, authRaw, { encoding: 'utf8', mode: 0o600 })
 
-  const proc = spawn('codex', buildAppServerArgs(), {
+  const proc = spawn(invocation.command, invocation.args, {
     env: { ...process.env, CODEX_HOME: tempCodexHome },
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
   })
+  const tracked = trackAccountProcess(proc)
 
   let disposed = false
   let initialized = false
@@ -661,13 +697,18 @@ async function withTemporaryCodexAppServer<T>(
   let readBuffer = ''
   let nextId = 1
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
+  let failure: Error | null = null
 
   const rejectAllPending = (error: Error) => {
+    failure = error
     for (const request of pending.values()) {
       request.reject(error)
     }
     pending.clear()
   }
+  const timeout = setTimeout(() => rejectAllPending(new Error('账户额度读取超时；当前登录账户仍然保留。')), ACCOUNT_INSPECTION_TIMEOUT_MS)
+  timeout.unref?.()
+  proc.stdin.on('error', error => rejectAllPending(error))
 
   proc.stdout.setEncoding('utf8')
   proc.stdout.on('data', (chunk: string) => {
@@ -719,6 +760,7 @@ async function withTemporaryCodexAppServer<T>(
   }
 
   const call = async (method: string, params: unknown): Promise<unknown> => {
+    if (failure) throw failure
     const id = nextId++
     return await new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject })
@@ -762,18 +804,9 @@ async function withTemporaryCodexAppServer<T>(
   const dispose = async () => {
     if (disposed) return
     disposed = true
+    clearTimeout(timeout)
     rejectAllPending(new Error('codex app-server stopped'))
-    try {
-      proc.stdin.end()
-    } catch {
-      // ignore
-    }
-    try {
-      proc.kill('SIGTERM')
-    } catch {
-      // ignore
-    }
-    await rm(tempCodexHome, { recursive: true, force: true })
+    await cleanupAccountHome(tempCodexHome, await tracked.stop())
   }
 
   try {
@@ -803,20 +836,8 @@ async function inspectStoredAccount(entry: StoredAccountEntry): Promise<AccountI
 }
 
 async function inspectStoredAccountWithTimeout(entry: StoredAccountEntry): Promise<AccountInspection> {
-  let timeoutHandle: NodeJS.Timeout | null = null
-  try {
-    return await Promise.race<AccountInspection>([
-      inspectStoredAccount(entry),
-      new Promise<AccountInspection>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Account quota inspection timed out after ${ACCOUNT_INSPECTION_TIMEOUT_MS}ms`))
-        }, ACCOUNT_INSPECTION_TIMEOUT_MS)
-        timeoutHandle.unref?.()
-      }),
-    ])
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle)
-  }
+  // Timeout is enforced inside the child lifecycle, so cleanup is awaited too.
+  return inspectStoredAccount(entry)
 }
 
 function shouldRefreshAccountQuota(entry: StoredAccountEntry): boolean {
@@ -833,6 +854,7 @@ function shouldRefreshAccountQuota(entry: StoredAccountEntry): boolean {
 
 async function replaceStoredAccount(nextEntry: StoredAccountEntry): Promise<void> {
   const state = await readStoredAccountsState()
+  if (!state.accounts.some(entry => entry.storageId === nextEntry.storageId)) return
   const nextState = withUpsertedAccount(state, nextEntry)
   await writeStoredAccountsState(nextState)
 }
@@ -848,22 +870,24 @@ async function pickReplacementActiveAccount(accounts: StoredAccountEntry[]): Pro
   return null
 }
 
-async function refreshAccountsInBackground(storageIds: string[]): Promise<void> {
+async function refreshAccountsInBackground(storageIds: string[], appServer?: AppServerLike): Promise<void> {
   for (const storageId of storageIds) {
     const state = await readStoredAccountsState()
     const entry = state.accounts.find((item) => item.storageId === storageId)
     if (!entry) continue
 
     try {
-      const inspected = await inspectStoredAccountWithTimeout(entry)
+      const inspected = appServer && state.activeStorageId === storageId
+        ? await validateSwitchedAccount(appServer)
+        : await inspectStoredAccountWithTimeout(entry)
       await replaceStoredAccount({
         ...entry,
         email: inspected.metadata.email ?? entry.email,
         planType: inspected.metadata.planType ?? entry.planType,
         quotaSnapshot: inspected.quotaSnapshot ?? entry.quotaSnapshot,
         quotaUpdatedAtIso: new Date().toISOString(),
-        quotaStatus: 'ready',
-        quotaError: null,
+        quotaStatus: inspected.quotaError ? 'error' : 'ready',
+        quotaError: inspected.quotaError ?? null,
         unavailableReason: null,
       })
     } catch (error) {
@@ -879,7 +903,7 @@ async function refreshAccountsInBackground(storageIds: string[]): Promise<void> 
 }
 
 async function scheduleAccountsBackgroundRefresh(
-  options: { force?: boolean; prioritizeStorageId?: string; storageIds?: string[] } = {},
+  options: { force?: boolean; prioritizeStorageId?: string; storageIds?: string[]; appServer?: AppServerLike } = {},
 ): Promise<StoredAccountsState> {
   const state = await readStoredAccountsState()
   if (state.accounts.length === 0) return state
@@ -918,7 +942,8 @@ async function scheduleAccountsBackgroundRefresh(
 
   backgroundRefreshPromise = refreshAccountsInBackground(
     candidates.map((entry) => entry.storageId),
-  ).finally(() => {
+    options.appServer,
+  ).catch(() => { console.warn('[accounts] background quota refresh failed; active auth preserved') }).finally(() => {
     backgroundRefreshPromise = null
   })
 
@@ -983,11 +1008,16 @@ function extractLoginUrl(output: string): string | null {
   return match?.[0] ?? null
 }
 
-function isLocalCallbackUrl(rawUrl: string): boolean {
+function isLocalCallbackUrl(rawUrl: string, loginUrl?: string | null): boolean {
   try {
     const parsed = new URL(rawUrl)
     if (parsed.protocol !== 'http:') return false
-    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]' || parsed.hostname === '::1'
+    if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(parsed.hostname)) return false
+    if (!loginUrl) return true
+    const authorize = new URL(loginUrl)
+    const redirect = new URL(authorize.searchParams.get('redirect_uri') || '')
+    return parsed.port === redirect.port && parsed.pathname === redirect.pathname
+      && !!authorize.searchParams.get('state') && parsed.searchParams.get('state') === authorize.searchParams.get('state')
   } catch {
     return false
   }
@@ -1027,14 +1057,19 @@ async function startCodexLogin(): Promise<string> {
     return await waitForLoginUrl()
   }
 
-  const proc = spawn('codex', ['login'], {
-    env: process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
+  await stopActiveLogin()
+  const invocation = codexInvocation(['login'])
+  const home = await mkdtemp(join(tmpdir(), 'codexui-login-'))
+  const proc = spawn(invocation.command, invocation.args, {
+    env: { ...process.env, CODEX_HOME: home },
+    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
   })
+  const tracked = trackAccountProcess(proc)
   proc.stdin.end()
 
   activeLogin = {
-    proc,
+    proc, home, stop: () => tracked.stop(),
+    expires: setTimeout(() => { void stopActiveLogin() }, 15 * 60_000),
     loginUrl: null,
     output: '',
     exited: false,
@@ -1052,6 +1087,8 @@ async function startCodexLogin(): Promise<string> {
     }),
   }
 
+  activeLogin.expires.unref?.()
+  proc.stdin.on('error', () => { /* an early exit is reported below */ })
   const appendOutput = (chunk: Buffer | string) => {
     if (!activeLogin || activeLogin.proc !== proc) return
     activeLogin.output += chunk.toString()
@@ -1069,10 +1106,7 @@ async function startCodexLogin(): Promise<string> {
   try {
     return await waitForLoginUrl()
   } catch (error) {
-    if (activeLogin?.proc === proc && !activeLogin.exited) {
-      proc.kill('SIGTERM')
-    }
-    activeLogin = null
+    if (activeLogin?.proc === proc) await stopActiveLogin()
     throw error
   }
 }
@@ -1093,31 +1127,32 @@ async function curlLoginCallback(callbackUrl: string): Promise<void> {
   }
 }
 
-async function getActiveAuthMtimeMs(): Promise<number | null> {
+async function getActiveAuthMtimeMs(path = getActiveAuthPath()): Promise<number | null> {
   try {
-    return (await stat(getActiveAuthPath())).mtimeMs
+    return (await stat(path)).mtimeMs
   } catch {
     return null
   }
 }
 
-async function waitForAuthFileUpdate(previousMtimeMs: number | null): Promise<void> {
+async function waitForAuthFileUpdate(previousMtimeMs: number | null, path = getActiveAuthPath()): Promise<void> {
   const startedAt = Date.now()
   while (Date.now() - startedAt <= LOGIN_AUTH_FILE_TIMEOUT_MS) {
-    const nextMtimeMs = await getActiveAuthMtimeMs()
+    const nextMtimeMs = await getActiveAuthMtimeMs(path)
     if (nextMtimeMs !== null && (previousMtimeMs === null || nextMtimeMs > previousMtimeMs)) {
       return
     }
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
+  throw new Error('登录结果尚未写入，请稍后重试。现有登录保持不变。')
 }
 
-function stopActiveLogin(): void {
-  if (!activeLogin) return
-  if (!activeLogin.exited) {
-    activeLogin.proc.kill('SIGTERM')
-  }
+async function stopActiveLogin(): Promise<void> {
+  const login = activeLogin
+  if (!login) return
   activeLogin = null
+  clearTimeout(login.expires)
+  await cleanupAccountHome(login.home, await login.stop())
 }
 
 export async function handleAccountRoutes(
@@ -1126,10 +1161,23 @@ export async function handleAccountRoutes(
   url: URL,
   context: AccountRouteContext,
 ): Promise<boolean> {
+  if (!url.pathname.startsWith('/codex-api/accounts')) return false
+  const handle = async () => {
+    try { return await handleAccountRoute(req, res, url, context) }
+    catch { setJson(res, 500, { error: 'account_service_failed', message: '账户信息暂时无法读取，请稍后重试。现有登录已保留。' }); return true }
+  }
+  if (req.method !== 'POST') return handle()
+  // Cancel, complete and switch cannot change the same login concurrently.
+  const operation = accountActionQueue.then(handle, handle)
+  accountActionQueue = operation.catch(() => undefined)
+  return operation
+}
+
+async function handleAccountRoute(req: IncomingMessage, res: ServerResponse, url: URL, context: AccountRouteContext): Promise<boolean> {
   const { appServer } = context
 
   if (req.method === 'GET' && url.pathname === '/codex-api/accounts') {
-    const state = await scheduleAccountsBackgroundRefresh()
+    const state = await scheduleAccountsBackgroundRefresh({ appServer })
     setJson(res, 200, {
       data: {
         activeAccountId: state.activeAccountId,
@@ -1153,65 +1201,17 @@ export async function handleAccountRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/accounts/refresh') {
     try {
+      // Reload imports the current desktop credentials and refreshes quota in isolation.
+      // Never stop the shared writer or treat a quota outage as a logout.
       const imported = await importAccountFromAuthPath(getActiveAuthPath())
-
-      try {
-        appServer.dispose()
-        const inspection = await validateSwitchedAccount(appServer)
-        const state = await readStoredAccountsState()
-        const importedAccountId = imported.importedAccountId
-        const importedStorageId = imported.importedStorageId
-        const target = state.accounts.find((entry) => entry.storageId === importedStorageId) ?? null
-        if (!target) {
-          throw new Error('account_not_found')
-        }
-
-        const nextEntry: StoredAccountEntry = {
-          ...target,
-          email: inspection.metadata.email ?? target.email,
-          planType: inspection.metadata.planType ?? target.planType,
-          lastActivatedAtIso: new Date().toISOString(),
-          quotaSnapshot: inspection.quotaSnapshot ?? target.quotaSnapshot,
-          quotaUpdatedAtIso: new Date().toISOString(),
-          quotaStatus: 'ready',
-          quotaError: null,
-          unavailableReason: null,
-        }
-        const nextState = withUpsertedAccount({
-          activeAccountId: importedAccountId,
-          activeStorageId: importedStorageId,
-          accounts: state.accounts,
-        }, nextEntry)
-        await writeStoredAccountsState(nextState)
-
-        const backgroundState = await scheduleAccountsBackgroundRefresh({
-          force: true,
-          prioritizeStorageId: importedStorageId,
-          storageIds: nextState.accounts.filter((entry) => entry.storageId !== importedStorageId).map((entry) => entry.storageId),
-        })
-
-        setJson(res, 200, {
-          data: {
-            activeAccountId: importedAccountId,
-            activeStorageId: importedStorageId,
-            importedAccountId,
-            importedStorageId,
-            accounts: sortAccounts(backgroundState.accounts, importedStorageId).map((entry) => toPublicAccountEntry(entry, importedStorageId)),
-          },
-        })
-      } catch (error) {
-        setJson(res, 502, {
-          error: 'account_refresh_failed',
-          message: getErrorMessage(error, 'Failed to refresh account'),
-        })
-      }
+      const state = await scheduleAccountsBackgroundRefresh({ force: true, prioritizeStorageId: imported.importedStorageId, appServer })
+      setJson(res, 200, { data: {
+        activeAccountId: state.activeAccountId, activeStorageId: state.activeStorageId,
+        importedAccountId: imported.importedAccountId, importedStorageId: imported.importedStorageId,
+        accounts: sortAccounts(state.accounts, state.activeStorageId).map(entry => toPublicAccountEntry(entry, state.activeStorageId)),
+      } })
     } catch (error) {
-      const message = getErrorMessage(error, 'Failed to refresh account')
-      if (message === 'missing_account_id') {
-        setJson(res, 400, { error: 'missing_account_id', message: 'Current auth.json is missing tokens.account_id.' })
-        return true
-      }
-      setJson(res, 400, { error: 'invalid_auth_json', message: 'Failed to parse the current auth.json file.' })
+      setJson(res, 500, { error: 'account_refresh_failed', message: '未能重新读取主机登录信息，现有账户和对话已保留。请确认 Codex 客户端已登录后重试。' })
     }
     return true
   }
@@ -1234,6 +1234,12 @@ export async function handleAccountRoutes(
     return true
   }
 
+  if (req.method === 'POST' && url.pathname === '/codex-api/accounts/login/cancel') {
+    await stopActiveLogin()
+    setJson(res, 200, { ok: true })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname === '/codex-api/accounts/login/complete') {
     try {
       const payload = await readJsonBody(req)
@@ -1246,19 +1252,30 @@ export async function handleAccountRoutes(
         setJson(res, 400, { error: 'invalid_callback_url', message: 'The callback URL must use http://localhost or http://127.0.0.1.' })
         return true
       }
-      if (!activeLogin || activeLogin.exited) {
+      const login = activeLogin
+      if (!login || (login.exited && login.exitCode !== 0)) {
         setJson(res, 409, { error: 'login_not_running', message: 'Start Codex login before submitting the callback URL.' })
         return true
       }
-
-      const previousAuthMtimeMs = await getActiveAuthMtimeMs()
-      await curlLoginCallback(callbackUrl)
-      await waitForAuthFileUpdate(previousAuthMtimeMs)
-
-      const imported = await importAccountFromAuthPath(getActiveAuthPath())
-      stopActiveLogin()
-      appServer.dispose()
-      const inspection = await validateSwitchedAccount(appServer)
+      if (!isLocalCallbackUrl(callbackUrl, login.loginUrl)) {
+        setJson(res, 400, { error: 'invalid_callback_url', message: '回调地址不属于本次登录，请重新复制当前登录页面的完整地址。' })
+        return true
+      }
+      if (await blockAccountChange(appServer, res)) return true
+      const loginAuthPath = join(login.home, 'auth.json')
+      const previousAuthMtimeMs = await getActiveAuthMtimeMs(loginAuthPath)
+      if (previousAuthMtimeMs === null) {
+        await curlLoginCallback(callbackUrl)
+        await waitForAuthFileUpdate(previousAuthMtimeMs, loginAuthPath)
+      }
+      const auth = await readAuthFileFromPath(loginAuthPath)
+      const inspection = await withTemporaryCodexAppServer(auth.raw, async rpc => {
+        const payload = asRecord(await rpc('account/read', { refreshToken: false }))
+        if (!asRecord(payload?.account)) throw new Error('登录信息无效，现有账户已保留。')
+        return auth.metadata
+      })
+      // Stage and validate before replacing the working login.
+      const imported = await importAccountFromAuthPath(loginAuthPath)
       const state = await readStoredAccountsState()
       const importedAccountId = imported.importedAccountId
       const importedStorageId = imported.importedStorageId
@@ -1269,12 +1286,12 @@ export async function handleAccountRoutes(
 
       const nextEntry: StoredAccountEntry = {
         ...target,
-        email: inspection.metadata.email ?? target.email,
-        planType: inspection.metadata.planType ?? target.planType,
+        email: inspection.email ?? target.email,
+        planType: inspection.planType ?? target.planType,
         lastActivatedAtIso: new Date().toISOString(),
-        quotaSnapshot: inspection.quotaSnapshot ?? target.quotaSnapshot,
+        quotaSnapshot: target.quotaSnapshot,
         quotaUpdatedAtIso: new Date().toISOString(),
-        quotaStatus: 'ready',
+        quotaStatus: 'idle',
         quotaError: null,
         unavailableReason: null,
       }
@@ -1283,13 +1300,22 @@ export async function handleAccountRoutes(
         activeStorageId: importedStorageId,
         accounts: state.accounts,
       }, nextEntry)
-      await writeStoredAccountsState(nextState)
-
+      if (await blockAccountChange(appServer, res)) return true
+      const previousRaw = await readFile(getActiveAuthPath(), 'utf8').catch(() => null)
+      await writeAccountFile(getActiveAuthPath(), auth.raw)
+      try { await writeStoredAccountsState(nextState) }
+      catch (error) {
+        if (await readFile(getActiveAuthPath(), 'utf8').catch(() => null) === auth.raw) await restoreActiveAuth(previousRaw)
+        throw error
+      }
+      appServer.dispose()
+      await stopActiveLogin()
       const backgroundState = await scheduleAccountsBackgroundRefresh({
+        appServer,
         force: true,
         prioritizeStorageId: importedStorageId,
-        storageIds: nextState.accounts.filter((entry) => entry.storageId !== importedStorageId).map((entry) => entry.storageId),
-      })
+        storageIds: nextState.accounts.map((entry) => entry.storageId),
+      }).catch(() => nextState)
 
       setJson(res, 200, {
         ok: true,
@@ -1312,6 +1338,7 @@ export async function handleAccountRoutes(
 
   if (req.method === 'POST' && url.pathname === '/codex-api/accounts/switch') {
     try {
+      if (await blockAccountChange(appServer, res)) return true
       if (appServer.listPendingServerRequests().length > 0) {
         setJson(res, 409, {
           error: 'account_switch_blocked',
@@ -1363,8 +1390,8 @@ export async function handleAccountRoutes(
           lastActivatedAtIso: new Date().toISOString(),
           quotaSnapshot: inspection.quotaSnapshot ?? target.quotaSnapshot,
           quotaUpdatedAtIso: new Date().toISOString(),
-          quotaStatus: 'ready',
-          quotaError: null,
+          quotaStatus: inspection.quotaError ? 'error' : 'ready',
+          quotaError: inspection.quotaError ?? null,
           unavailableReason: null,
         }
         const nextState = withUpsertedAccount({
@@ -1374,10 +1401,11 @@ export async function handleAccountRoutes(
         }, nextEntry)
         await writeStoredAccountsState(nextState)
         void scheduleAccountsBackgroundRefresh({
+          appServer,
           force: true,
           prioritizeStorageId: target.storageId,
           storageIds: nextState.accounts.filter((entry) => entry.storageId !== target.storageId).map((entry) => entry.storageId),
-        })
+        }).catch(() => { console.warn("[accounts] quota scheduling deferred") })
         setJson(res, 200, {
           ok: true,
           data: {
@@ -1456,6 +1484,7 @@ export async function handleAccountRoutes(
         return true
       }
 
+      if (await blockAccountChange(appServer, res)) return true
       let previousRaw: string | null = null
       try {
         previousRaw = await readFile(getActiveAuthPath(), 'utf8')
@@ -1474,9 +1503,10 @@ export async function handleAccountRoutes(
           accounts: remainingAccounts,
         })
         void scheduleAccountsBackgroundRefresh({
+          appServer,
           force: true,
           storageIds: remainingAccounts.map((entry) => entry.storageId),
-        })
+        }).catch(() => { console.warn("[accounts] quota scheduling deferred") })
         setJson(res, 200, {
           ok: true,
           data: {
@@ -1510,8 +1540,8 @@ export async function handleAccountRoutes(
           lastActivatedAtIso: new Date().toISOString(),
           quotaSnapshot: inspection.quotaSnapshot ?? replacement.quotaSnapshot,
           quotaUpdatedAtIso: new Date().toISOString(),
-          quotaStatus: 'ready',
-          quotaError: null,
+          quotaStatus: inspection.quotaError ? 'error' : 'ready',
+          quotaError: inspection.quotaError ?? null,
           unavailableReason: null,
         }
         const nextAccounts = remainingAccounts.map((entry) => (
@@ -1524,12 +1554,13 @@ export async function handleAccountRoutes(
           accounts: nextAccounts,
         })
         void scheduleAccountsBackgroundRefresh({
+          appServer,
           force: true,
           prioritizeStorageId: activatedReplacement.storageId,
           storageIds: nextAccounts
             .filter((entry) => entry.storageId !== activatedReplacement.storageId)
             .map((entry) => entry.storageId),
-        })
+        }).catch(() => { console.warn("[accounts] quota scheduling deferred") })
         setJson(res, 200, {
           ok: true,
           data: {

@@ -832,6 +832,7 @@ describe('live error overlay', () => {
     })
 
     expect(state.selectedLiveOverlay.value?.errorText).toBe('new live failure')
+    expect(state.selectedThreadTaskStatus.value).toBe('failed')
   })
 
   it('suppresses a live error only after that same error has persisted', async () => {
@@ -1309,6 +1310,7 @@ describe('provider model selection', () => {
     await Promise.resolve()
 
     expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('mini-thread')
+    expect(state.selectedThreadTaskStatus.value).toBe('completed')
     expect(state.messages.value.map((message) => `${message.role}:${message.text}`)).toEqual([
       'user:hi',
       'system:Worked for <1s',

@@ -85,6 +85,14 @@
   @apply border-zinc-700;
 }
 
+:root.dark .sidebar-settings-quota-title {
+  @apply text-zinc-200;
+}
+
+:root.dark .sidebar-settings-quota-empty {
+  @apply text-zinc-400;
+}
+
 :root.dark .sidebar-settings-account-section {
   @apply border-zinc-700 bg-zinc-800/70;
 }
@@ -1958,3 +1966,6 @@
 :root.dark .mermaid-toolbar button, :root.dark .mermaid-error button { border-color: #52525b; }
 :root.dark .mermaid-toolbar button:hover, :root.dark .mermaid-error button:hover { background: #3f3f46; }
 :root.dark .mermaid-status { color: #a1a1aa; }
+/* Conversation activity uses the same quiet secondary surface in both themes. */
+:root { --activity-muted: #64748b; --activity-text: #334155; --activity-bg: #f1f5f9; --activity-error: #be123c; --activity-running: #a16207; }
+:root.dark { --activity-muted: #a1a1aa; --activity-text: #e4e4e7; --activity-bg: #242426; --activity-error: #fb7185; --activity-running: #fbbf24; }

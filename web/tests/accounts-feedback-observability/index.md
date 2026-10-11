@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [Account reload and login stability](account-reload-login-stability.md) |
 | [Qodo feedback diagnostics reliability fixes](qodo-feedback-diagnostics-reliability-fixes.md) |
 | [Error-triggered feedback button](error-triggered-feedback-button.md) |
 | [Qodo review fixes for PR 130 and PR 131 reverts](qodo-review-fixes-for-pr-130-and-pr-131-reverts.md) |

@@ -2,6 +2,7 @@ import { mutationHeaders, identityHeaders, conversationStates, releaseControl } 
 import type { ReasoningEffort as UiReasoningEffort } from '../types/codex'
 import { normalizeProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
 import { modelCapabilities } from './modelCapabilities'
+import { readServiceJson } from './serviceJson'
 import type { ZenModelMetadata } from '../types/zenModels'
 import {
   fetchRpcMethodCatalog,
@@ -1416,10 +1417,7 @@ function normalizeAccountsListResult(payload: unknown): AccountsListResult {
 
 export async function getAccounts(): Promise<AccountsListResult> {
   const response = await fetch('/codex-api/accounts')
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to load accounts'))
-  }
+  const payload = await readServiceJson(response, '读取账户失败，请稍后重试。')
   const envelope = asRecord(payload)
   return normalizeAccountsListResult(envelope?.data)
 }
@@ -1428,10 +1426,7 @@ export async function refreshAccountsFromAuth(): Promise<AccountsListResult> {
   const response = await fetch('/codex-api/accounts/refresh', {
     method: 'POST',
   })
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to refresh accounts'))
-  }
+  const payload = await readServiceJson(response, '刷新账户失败，请稍后重试。')
   const envelope = asRecord(payload)
   return normalizeAccountsListResult(envelope?.data)
 }
@@ -1440,10 +1435,7 @@ export async function startCodexLogin(): Promise<string> {
   const response = await fetch('/codex-api/accounts/login/start', {
     method: 'POST',
   })
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to start Codex login'))
-  }
+  const payload = await readServiceJson(response, '启动账户登录失败，现有账户仍可使用。')
   const envelope = asRecord(payload)
   const data = asRecord(envelope?.data)
   const loginUrl = readString(data?.loginUrl)
@@ -1453,16 +1445,17 @@ export async function startCodexLogin(): Promise<string> {
   return loginUrl
 }
 
+export async function cancelCodexLogin(): Promise<void> {
+  await readServiceJson(await fetch('/codex-api/accounts/login/cancel', { method: 'POST' }), '取消登录失败，请稍后重试。')
+}
+
 export async function completeCodexLogin(callbackUrl: string): Promise<AccountsListResult> {
   const response = await fetch('/codex-api/accounts/login/complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callbackUrl }),
   })
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to complete Codex login'))
-  }
+  const payload = await readServiceJson(response, '完成账户登录失败，现有账户仍可使用。')
   const envelope = asRecord(payload)
   return normalizeAccountsListResult(envelope?.data)
 }
@@ -1473,10 +1466,7 @@ export async function switchAccount(storageId: string): Promise<UiAccountEntry> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ storageId }),
   })
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to switch account'))
-  }
+  const payload = await readServiceJson(response, '切换账户失败，原账户已保留。')
   const envelope = asRecord(payload)
   const data = asRecord(envelope?.data)
   const account = normalizeAccountEntry(data?.account, readString(data?.activeAccountId), readString(data?.activeStorageId))
@@ -1492,10 +1482,7 @@ export async function removeAccount(storageId: string): Promise<AccountsListResu
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ storageId }),
   })
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to remove account'))
-  }
+  const payload = await readServiceJson(response, '移除账户失败，请稍后重试。')
   const envelope = asRecord(payload)
   return normalizeAccountsListResult(envelope?.data)
 }
@@ -2008,7 +1995,7 @@ export interface FreeModeStatus {
 
 export async function getFreeModeStatus(): Promise<FreeModeStatus> {
   const response = await fetch('/codex-api/free-mode/status')
-  return await response.json() as FreeModeStatus
+  return await readServiceJson(response, '无法读取提供方设置') as FreeModeStatus
 }
 
 export async function setFreeMode(enable: boolean): Promise<{ ok: boolean; enabled: boolean; model?: string; models?: string[] }> {
@@ -2017,7 +2004,7 @@ export async function setFreeMode(enable: boolean): Promise<{ ok: boolean; enabl
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enable }),
   })
-  return await response.json() as { ok: boolean; enabled: boolean; model?: string; models?: string[] }
+  return await readServiceJson(response, '无法保存提供方设置') as { ok: boolean; enabled: boolean; model?: string; models?: string[] }
 }
 
 export async function setFreeModeCustomKey(key: string): Promise<{ ok: boolean; customKey: boolean }> {
@@ -2026,7 +2013,7 @@ export async function setFreeModeCustomKey(key: string): Promise<{ ok: boolean; 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ key }),
   })
-  return await response.json() as { ok: boolean; customKey: boolean }
+  return await readServiceJson(response, '无法保存 API Key') as { ok: boolean; customKey: boolean }
 }
 
 export async function setCustomProvider(
@@ -2044,7 +2031,7 @@ export async function setCustomProvider(
       provider: options?.provider,
     }),
   })
-  return await response.json() as { ok: boolean }
+  return await readServiceJson(response, '无法保存提供方设置') as { ok: boolean }
 }
 
 async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string[], exclusive: boolean; models?: ZenModelMetadata[] } | null> {

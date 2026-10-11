@@ -256,6 +256,7 @@ function getOpenCodeZenProviderConfigArgs(serverPort?: number): string[] {
     '-c', `${providerConfigKey}.name="OpenCode Zen"`,
     '-c', `${providerConfigKey}.base_url="${baseUrl}"`,
     '-c', `${providerConfigKey}.wire_api="responses"`,
+    '-c', `${providerConfigKey}.requires_openai_auth=false`,
     ...authArgs,
   ]
 }
@@ -296,6 +297,7 @@ export function getFreeModeConfigArgs(state: FreeModeState, serverPort?: number)
       '-c', `${providerConfigKey}.name="Custom Endpoint"`,
       '-c', `${providerConfigKey}.base_url="${baseUrl}"`,
       '-c', `${providerConfigKey}.wire_api="${wireApi}"`,
+      '-c', `${providerConfigKey}.requires_openai_auth=false`,
       ...authArgs,
     ]
   }
@@ -312,6 +314,7 @@ export function getFreeModeConfigArgs(state: FreeModeState, serverPort?: number)
     '-c', `${providerConfigKey}.name="OpenRouter Free"`,
     '-c', `${providerConfigKey}.base_url="${baseUrl}"`,
     '-c', `${providerConfigKey}.wire_api="responses"`,
+    '-c', `${providerConfigKey}.requires_openai_auth=false`,
     '-c', `${providerConfigKey}.experimental_bearer_token="${bearerToken}"`,
   ]
 }

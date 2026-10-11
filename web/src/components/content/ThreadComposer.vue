@@ -1759,7 +1759,7 @@ function onInputKeydown(event: KeyboardEvent): void {
 
   const shouldSend = props.sendWithEnter !== false
     ? event.key === 'Enter' && !event.shiftKey
-    : event.key === 'Enter' && (event.metaKey || event.ctrlKey)
+    : event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.shiftKey
   if (shouldSend) {
     event.preventDefault()
     onSubmit(props.isTurnInProgress ? activeInProgressMode.value : 'steer')

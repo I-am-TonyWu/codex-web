@@ -120,112 +120,13 @@
               class="sidebar-settings-panel"
               @click.stop
             >
-              <div class="sidebar-settings-account-section">
-                <div class="sidebar-settings-account-header">
-                  <div class="sidebar-settings-account-header-main">
-                    <button
-                      class="sidebar-settings-account-collapse"
-                      type="button"
-                      :aria-expanded="!isAccountsSectionCollapsed"
-                      :title="isAccountsSectionCollapsed ? t('Expand accounts') : t('Collapse accounts')"
-                      @click="toggleAccountsSectionCollapsed"
-                    >
-                      <span class="sidebar-settings-account-collapse-icon">{{ isAccountsSectionCollapsed ? '▸' : '▾' }}</span>
-                    </button>
-                    <span class="sidebar-settings-account-title">{{ t('Accounts') }}</span>
-                    <span class="sidebar-settings-account-count">{{ accounts.length }}</span>
-                  </div>
-                  <button
-                    class="sidebar-settings-account-refresh"
-                    type="button"
-                    :disabled="isRefreshingAccounts || isSwitchingAccounts || isStartingCodexLogin || isCompletingCodexLogin"
-                    @click="onRefreshAccounts"
-                  >
-                    {{ isRefreshingAccounts ? t('Reloading…') : t('Reload') }}
-                  </button>
-                </div>
-                <template v-if="!isAccountsSectionCollapsed">
-                  <div v-if="accountActionError" class="sidebar-settings-account-error visible-error-with-feedback">
-                    <span>{{ accountActionError }}</span>
-                    <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, accountActionError)">{{ t('Send feedback') }}</a>
-                  </div>
-                  <div class="sidebar-settings-account-login">
-                    <button
-                      class="sidebar-settings-account-login-button"
-                      type="button"
-                      :disabled="isRefreshingAccounts || isSwitchingAccounts || isStartingCodexLogin || isCompletingCodexLogin"
-                      @click="onStartCodexLogin"
-                    >
-                      {{ isStartingCodexLogin ? t('Starting login…') : t('Login') }}
-                    </button>
-                    <a
-                      v-if="codexLoginUrl"
-                      class="sidebar-settings-account-login-link"
-                      :href="codexLoginUrl"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {{ t('Open login URL') }}
-                    </a>
-                  </div>
-                  <p v-if="accounts.length === 0" class="sidebar-settings-account-empty">
-                    {{ t('Click Login, or run `codex login`, then click reload.') }}
-                  </p>
-                  <div v-else class="sidebar-settings-account-list">
-                  <article
-                    v-for="account in accounts"
-                    :key="account.storageId"
-                    class="sidebar-settings-account-item"
-                    :class="{
-                      'is-active': account.isActive,
-                      'is-unavailable': isAccountUnavailable(account),
-                      'is-confirming-remove': isRemoveConfirmationActive(account),
-                      'is-remove-visible': isRemoveVisible(account),
-                    }"
-                    :title="buildAccountTitle(account)"
-                    @mouseenter="onAccountCardPointerEnter(account.storageId)"
-                    @mouseleave="onAccountCardPointerLeave(account.storageId)"
-                  >
-                    <div class="sidebar-settings-account-main">
-                      <p class="sidebar-settings-account-email">{{ account.email || t('Account') }}</p>
-                      <p class="sidebar-settings-account-meta">
-                        {{ formatAccountMeta(account) }}
-                      </p>
-                      <p class="sidebar-settings-account-quota">
-                        {{ formatAccountQuota(account) }}
-                      </p>
-                      <p class="sidebar-settings-account-id">
-                        Workspace {{ shortAccountId(account.accountId) }}
-                      </p>
-                    </div>
-                    <div class="sidebar-settings-account-actions">
-                      <button
-                        class="sidebar-settings-account-switch"
-                        type="button"
-                        :disabled="isAccountActionDisabled(account) || account.isActive || isAccountUnavailable(account)"
-                        @click="onSwitchAccount(account.storageId)"
-                      >
-                        {{ getAccountSwitchLabel(account) }}
-                      </button>
-                      <button
-                        class="sidebar-settings-account-remove"
-                        :class="{
-                          'is-visible': isRemoveVisible(account),
-                          'is-confirming': isRemoveConfirmationActive(account),
-                        }"
-                        type="button"
-                        :disabled="isAccountActionDisabled(account)"
-                        @click="onRemoveAccount(account.storageId)"
-                      >
-                        {{ getAccountRemoveLabel(account) }}
-                      </button>
-                    </div>
-                  </article>
-                  </div>
-                </template>
+              <div class="sidebar-settings-rate-limits">
+                <p class="sidebar-settings-quota-title">{{ t('Codex usage') }}</p>
+                <RateLimitStatus :snapshots="accountRateLimitSnapshots" />
+                <p v-if="accountRateLimitSnapshots.length === 0" class="sidebar-settings-quota-empty">{{ t('Quota temporarily unavailable') }}</p>
               </div>
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.sendWithEnter" @click="toggleSendWithEnter">
-                <span class="sidebar-settings-label">{{ t('Require ⌘ + enter to send') }}</span>
+                <span class="sidebar-settings-label">{{ t('Require Ctrl + Enter to send') }}</span>
                 <span class="sidebar-settings-toggle" :class="{ 'is-on': !sendWithEnter }" />
               </button>
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.inProgressSendMode" @click="cycleInProgressSendMode">
@@ -435,50 +336,6 @@
                   @update:model-value="onDictationLanguageChange"
                 />
               </div>
-              <button class="sidebar-settings-row" type="button" aria-live="polite" @click="isTelegramConfigOpen = !isTelegramConfigOpen">
-                <span class="sidebar-settings-label">{{ t('Telegram') }}</span>
-                <span class="sidebar-settings-value">{{ telegramStatusText }}</span>
-              </button>
-              <div v-if="isTelegramConfigOpen" class="sidebar-settings-telegram-panel">
-                <label class="sidebar-settings-field">
-                  <span class="sidebar-settings-field-label">{{ t('Bot token') }}</span>
-                  <input
-                    v-model="telegramBotTokenDraft"
-                    class="sidebar-settings-input"
-                    type="password"
-                    placeholder="123456:ABCDEF"
-                    autocomplete="off"
-                    spellcheck="false"
-                  >
-                </label>
-                <label class="sidebar-settings-field">
-                  <span class="sidebar-settings-field-label">{{ t('Allowed Telegram user IDs') }}</span>
-                  <textarea
-                    v-model="telegramAllowedUserIdsDraft"
-                    class="sidebar-settings-textarea"
-                    rows="3"
-                    placeholder="123456789&#10;987654321"
-                    spellcheck="false"
-                  />
-                </label>
-                <div class="sidebar-settings-field-help">
-                  {{ t('Put one Telegram user ID per line or separate them with commas. Use `*` to allow all Telegram users. Unauthorized users will see their own ID in the rejection message so they can copy it here.') }}
-                </div>
-                <div v-if="telegramConfigError" class="sidebar-settings-telegram-error">
-                  <span>{{ telegramConfigError }}</span>
-                  <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, telegramConfigError)">{{ t('Send feedback') }}</a>
-                </div>
-                <div class="sidebar-settings-telegram-actions">
-                  <button
-                    class="sidebar-settings-telegram-save"
-                    type="button"
-                    :disabled="isTelegramSaving"
-                    @click="saveTelegramConfig"
-                  >
-                    {{ isTelegramSaving ? t('Saving…') : t('Save Telegram config') }}
-                  </button>
-                </div>
-              </div>
               <div
                 v-if="showThreadContextBadge"
                 class="sidebar-settings-row sidebar-settings-context-row"
@@ -490,9 +347,6 @@
                   {{ threadContextPrimaryText }}
                   <span class="sidebar-settings-context-meta">{{ threadContextSecondaryText }}</span>
                 </span>
-              </div>
-              <div class="sidebar-settings-rate-limits">
-                <RateLimitStatus :snapshots="accountRateLimitSnapshots" />
               </div>
               <div class="sidebar-settings-build-label" :aria-label="t('Worktree name and version')">
                 WT {{ worktreeName }} · v{{ appVersion }}
@@ -986,6 +840,9 @@
                   <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                     :active-thread-id="composerThreadContextId" :cwd="composerCwd"
                     :live-overlay="liveOverlay"
+                    :is-running="isSelectedThreadInProgress"
+                    :is-sending="isSendingMessage"
+                    :turn-status="selectedThreadTaskStatus"
                     :is-continuing-on-web="isContinuingOnWeb"
                     :is-retrying-thread-writer="isRetryingThreadWriter"
                     :pending-requests="selectedThreadServerRequests"
@@ -1132,76 +989,6 @@
       </div>
     </div>
   </div>
-  <div
-    v-if="isCodexLoginModalOpen"
-    class="codex-login-modal-backdrop"
-    role="presentation"
-    @click="onCancelCodexLoginModal"
-  >
-    <form
-      class="codex-login-modal"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="t('Complete Codex login')"
-      @submit.prevent="onSubmitCodexLoginCallback"
-      @click.stop
-    >
-      <div class="codex-login-modal-header">
-        <h2 class="codex-login-modal-title">{{ t('Complete Codex login') }}</h2>
-        <button
-          class="codex-login-modal-close"
-          type="button"
-          :aria-label="t('Close')"
-          :disabled="isCompletingCodexLogin"
-          @click="onCancelCodexLoginModal"
-        >
-          ×
-        </button>
-      </div>
-      <p class="codex-login-modal-copy">
-        {{ t('Finish login in the browser, then paste the localhost callback URL here.') }}
-      </p>
-      <a
-        v-if="codexLoginUrl"
-        class="codex-login-modal-link"
-        :href="codexLoginUrl"
-        target="_blank"
-        rel="noreferrer"
-      >
-        {{ t('Open login URL') }}
-      </a>
-      <input
-        ref="codexLoginCallbackInputRef"
-        v-model="codexLoginCallbackUrl"
-        class="codex-login-modal-input"
-        type="url"
-        inputmode="url"
-        :placeholder="t('Paste localhost callback URL')"
-        :disabled="isCompletingCodexLogin"
-      >
-      <div v-if="accountActionError" class="codex-login-modal-error visible-error-with-feedback">
-        <span>{{ accountActionError }}</span>
-        <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, accountActionError)">{{ t('Send feedback') }}</a>
-      </div>
-      <div class="codex-login-modal-actions">
-        <button
-          class="codex-login-modal-cancel"
-          type="button"
-          :disabled="isCompletingCodexLogin"
-          @click="onCancelCodexLoginModal"
-        >
-          {{ t('Cancel') }}
-        </button>
-        <button
-          class="codex-login-modal-submit"
-          type="submit"
-          :disabled="isCompletingCodexLogin || codexLoginCallbackUrl.trim().length === 0"
-        >
-          {{ isCompletingCodexLogin ? t('Completing…') : t('Complete') }}
-        </button>
-      </div>
-    </form>
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -1232,7 +1019,6 @@ import {
   clearThreadGoal,
   checkoutGitBranch,
   cloneGithubRepository,
-  configureTelegramBot,
   createPermanentWorktree,
   createWorktree,
   createProjectlessThreadDirectory,
@@ -1243,14 +1029,10 @@ import {
   getGitRepositoryStatus,
   getReviewSummary,
   getWorktreeBranchOptions,
-  getAccounts,
-  completeCodexLogin,
   createLocalDirectory,
   getFirstLaunchPluginsCardPreference,
   getHomeDirectory,
-  getTelegramConfig,
   getProjectRootSuggestion,
-  getTelegramStatus,
   getThreadTerminalQuickCommands,
   getThreadTerminalStatus,
   getThreadGoal,
@@ -1260,17 +1042,13 @@ import {
   listLocalDirectories,
   openProjectRoot,
   persistFirstLaunchPluginsCardPreference,
-  removeAccount,
-  refreshAccountsFromAuth,
   resetGitBranchToCommit,
-  startCodexLogin,
   searchThreads,
-  switchAccount,
   setThreadGoal,
 } from './api/codexGateway'
-import type { ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation, UiThreadTokenUsage } from './types/codex'
+import type { ReasoningEffort, SpeedMode, UiServerRequest, UiServerRequestReply, UiThreadAutomation, UiThreadTokenUsage } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
-import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadGoal, ThreadGoalStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
+import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, ThreadGoal, ThreadGoalStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
@@ -1283,13 +1061,12 @@ const AutomationsPanel = defineAsyncComponent(() => import('./components/content
 const { t, uiLanguage, uiLanguageOptions, setUiLanguage } = useUiLanguage()
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
-const ACCOUNTS_SECTION_COLLAPSED_STORAGE_KEY = 'codex-web-local.accounts-section-collapsed.v1'
 const TERMINAL_QUICK_COMMAND_STORAGE_KEY = 'codex-web-local.terminal-quick-commands.v1'
 const TOGGLE_TERMINAL_COMMAND_VALUE = '__toggle_terminal__'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const SETTINGS_HELP = {
-  sendWithEnter: t('When enabled, press Enter to send. When disabled, use Command+Enter to send.'),
+  sendWithEnter: t('When enabled, use Ctrl+Enter to send and Enter for a new line. When disabled, use Enter to send and Shift+Enter for a new line.'),
   inProgressSendMode: t('If a turn is still running, choose whether a new prompt should steer the current turn or be queued.'),
   appearance: t('Switch between system theme, light mode, and dark mode.'),
   chatWidth: t('Choose how wide the conversation column and composer can grow on desktop screens.'),
@@ -1459,6 +1236,7 @@ const {
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedLiveOverlay,
+  selectedThreadTaskStatus,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,
@@ -1622,7 +1400,6 @@ let threadWorktreeSummaryRequestId = 0
 const defaultNewProjectName = ref('New Project (1)')
 const homeDirectory = ref('')
 const isSettingsOpen = ref(false)
-const isAccountsSectionCollapsed = ref(loadAccountsSectionCollapsed())
 const isReviewPaneOpen = ref(false)
 const reviewInitialFilePath = ref('')
 const reviewInitialCommitSha = ref('')
@@ -1649,19 +1426,6 @@ function toThreadBranchCommitsKey(branch: string, includeResetHistory: boolean):
 }
 
 const createFolderInputRef = ref<HTMLInputElement | null>(null)
-const accounts = ref<UiAccountEntry[]>([])
-const isRefreshingAccounts = ref(false)
-const isSwitchingAccounts = ref(false)
-const isStartingCodexLogin = ref(false)
-const isCompletingCodexLogin = ref(false)
-const isCodexLoginModalOpen = ref(false)
-const codexLoginUrl = ref('')
-const codexLoginCallbackUrl = ref('')
-const codexLoginCallbackInputRef = ref<HTMLInputElement | null>(null)
-const removingAccountId = ref('')
-const confirmingRemoveAccountId = ref('')
-const hoveredAccountId = ref('')
-const accountActionError = ref('')
 const SEND_WITH_ENTER_KEY = 'codex-web-local.send-with-enter.v1'
 const IN_PROGRESS_SEND_MODE_KEY = 'codex-web-local.in-progress-send-mode.v1'
 const DARK_MODE_KEY = 'codex-web-local.dark-mode.v1'
@@ -1713,11 +1477,6 @@ const customEndpointKey = ref('')
 const customEndpointWireApi = ref<'responses' | 'chat'>('responses')
 const openRouterWireApi = ref<'responses' | 'chat'>('responses')
 const opencodeZenKey = ref('')
-const isTelegramConfigOpen = ref(false)
-const telegramBotTokenDraft = ref('')
-const telegramAllowedUserIdsDraft = ref('')
-const telegramConfigError = ref('')
-const isTelegramSaving = ref(false)
 const isCreateFolderOpen = ref(false)
 const createFolderDraft = ref('')
 const createFolderError = ref('')
@@ -1749,33 +1508,18 @@ const visibleFeedbackErrors = [
   codexCliMissingError,
   threadBranchError,
   threadBranchCommitsError,
-  accountActionError,
   providerError,
-  telegramConfigError,
   createFolderError,
   projectSetupError,
   existingFolderError,
 ]
 const hasVisibleFeedbackError = computed(() => visibleFeedbackErrors.some((entry) => entry.value.trim().length > 0))
-const telegramStatus = ref<TelegramStatus>({
-  configured: false,
-  active: false,
-  mappedChats: 0,
-  mappedThreads: 0,
-  allowedUsers: 0,
-  allowAllUsers: false,
-  lastError: '',
-})
 const mobileHiddenAtMs = ref<number | null>(null)
 const mobileResumeReloadTriggered = ref(false)
 const mobileResumeSyncInProgress = ref(false)
 const visualViewportHeight = ref(typeof window !== 'undefined' ? window.visualViewport?.height ?? window.innerHeight : 0)
 const visualViewportOffsetTop = ref(typeof window !== 'undefined' ? window.visualViewport?.offsetTop ?? 0 : 0)
 const layoutViewportHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 0)
-let accountStatePollTimer: number | null = null
-let isAccountStatePollInFlight = false
-let externalCodexAuthAvailable = false
-let externalAuthImportAttempted = false
 let existingFolderBrowseRequestId = 0
 
 const routeThreadId = computed(() => {
@@ -1857,13 +1601,6 @@ const isTerminalKeyboardLayoutActive = computed(() => (
 const directoryCwd = computed(() => selectedThread.value?.cwd?.trim() ?? newThreadCwd.value.trim())
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
 const showThreadContextBadge = computed(() => !isHomeRoute.value && !isSkillsRoute.value && !isAutomationsRoute.value && selectedThreadId.value.trim().length > 0)
-const isAccountSwitchBlocked = computed(() =>
-  isSendingMessage.value ||
-  isInterruptingTurn.value ||
-  isSelectedThreadInProgress.value ||
-  selectedThreadServerRequests.value.length > 0,
-)
-
 function formatCompactTokenCount(value: number): string {
   if (!Number.isFinite(value)) return '0'
   return new Intl.NumberFormat('en-US', {
@@ -2240,17 +1977,6 @@ const contentStyle = computed(() => {
     '--virtual-keyboard-inset': `${keyboardInset}px`,
   }
 })
-const telegramStatusText = computed(() => {
-  if (!telegramStatus.value.configured) return t('Not configured')
-  const base = telegramStatus.value.active ? t('Online') : t('Configured (offline)')
-  const allowlist = telegramStatus.value.allowAllUsers
-    ? t('allow all users')
-    : `${telegramStatus.value.allowedUsers} ${t('allowed user(s)')}`
-  const mapped = `${telegramStatus.value.mappedChats} ${t('chat(s)')}, ${telegramStatus.value.mappedThreads} ${t('thread(s)')}, ${allowlist}`
-  const error = telegramStatus.value.lastError ? `, ${t('error')}: ${telegramStatus.value.lastError}` : ''
-  return `${base}, ${mapped}${error}`
-})
-
 let extensionPoll: number | undefined
 onMounted(() => {
   extensionPoll = window.setInterval(() => { if (!document.hidden) void refreshSkills({ force: true }) }, 30_000)
@@ -2270,8 +1996,6 @@ onMounted(() => {
   void loadFirstLaunchPluginsCardPreference()
   void loadWorkspaceRootOptionsState()
   void refreshDefaultProjectName()
-  void refreshTelegramConfig()
-  void refreshTelegramStatus()
   void loadFreeModeStatus()
   void refreshThreadTerminalStatus()
   void refreshTerminalQuickCommands()
@@ -2298,10 +2022,6 @@ onUnmounted(() => {
   window.visualViewport?.removeEventListener('resize', updateVisualViewportState)
   window.visualViewport?.removeEventListener('scroll', updateVisualViewportState)
   darkModeMediaQuery?.removeEventListener('change', applyDarkMode)
-  if (accountStatePollTimer !== null) {
-    window.clearInterval(accountStatePollTimer)
-    accountStatePollTimer = null
-  }
   if (threadSearchTimer) {
     clearTimeout(threadSearchTimer)
     threadSearchTimer = null
@@ -2346,132 +2066,13 @@ watch(isVirtualKeyboardOpen, (open) => {
   isTerminalKeyboardFocusFallbackActive.value = false
 })
 
-watch(accounts, () => {
-  if (typeof window === 'undefined') return
-  const shouldPoll = accounts.value.some((account) => account.quotaStatus === 'loading')
-  if (!shouldPoll) {
-    if (accountStatePollTimer !== null) {
-      window.clearInterval(accountStatePollTimer)
-      accountStatePollTimer = null
-    }
-    return
-  }
-  if (accountStatePollTimer !== null) return
-  accountStatePollTimer = window.setInterval(() => {
-    if (isAccountStatePollInFlight) return
-    isAccountStatePollInFlight = true
-    void loadAccountsState({ silent: true }).finally(() => {
-      isAccountStatePollInFlight = false
-    })
-  }, 1500)
-}, { deep: true })
-
-watch(accountRateLimitSnapshots, () => {
-  void maybeImportExternalCodexAuthAccount().then((imported) => {
-    if (!imported) return
-    void refreshAll({
-      includeSelectedThreadMessages: false,
-      providerChanged: true,
-      awaitAncillaryRefreshes: true,
-    })
-  })
-}, { deep: true })
-
-async function maybeImportExternalCodexAuthAccount(): Promise<boolean> {
-  if (!externalCodexAuthAvailable) return false
-  if (externalAuthImportAttempted) return false
-  if (selectedProvider.value !== 'codex') return false
-  if (accounts.value.length > 0) return false
-  if (accountRateLimitSnapshots.value.length === 0) return false
-  externalAuthImportAttempted = true
-  const previousAccountsJson = JSON.stringify(accounts.value.map((account) => account.accountId).sort())
-  try {
-    const result = await refreshAccountsFromAuth()
-    accounts.value = result.accounts
-  } catch {
-    await loadAccountsState({ silent: true })
-  }
-  const nextAccountsJson = JSON.stringify(accounts.value.map((account) => account.accountId).sort())
-  return previousAccountsJson !== nextAccountsJson
-}
-
 function onSkillsChanged(): void {
   void refreshSkills({ force: true })
-}
-
-async function refreshTelegramStatus(): Promise<void> {
-  try {
-    telegramStatus.value = await getTelegramStatus()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load Telegram status'
-    telegramStatus.value = {
-      configured: false,
-      active: false,
-      mappedChats: 0,
-      mappedThreads: 0,
-      allowedUsers: 0,
-      allowAllUsers: false,
-      lastError: message,
-    }
-  }
-}
-
-async function refreshTelegramConfig(): Promise<void> {
-  try {
-    const config = await getTelegramConfig()
-    telegramBotTokenDraft.value = config.botToken
-    telegramAllowedUserIdsDraft.value = config.allowedUserIds.map((value) => String(value)).join('\n')
-    telegramConfigError.value = ''
-  } catch (error) {
-    telegramConfigError.value = error instanceof Error ? error.message : 'Failed to load Telegram configuration'
-  }
 }
 
 async function loadFirstLaunchPluginsCardPreference(): Promise<void> {
   const preference = await getFirstLaunchPluginsCardPreference()
   showFirstLaunchPluginsCard.value = preference.dismissed !== true
-}
-
-function parseTelegramAllowedUserIdsInput(value: string): Array<number | '*'> {
-  const rawEntries = value
-    .split(/[\n,]/)
-    .map((entry) => entry.trim().replace(/^(telegram|tg):/i, '').trim())
-    .filter(Boolean)
-  const allowAllUsers = rawEntries.includes('*')
-  const normalizedUserIds = Array.from(new Set(rawEntries
-    .filter((entry) => /^-?\d+$/.test(entry))
-    .map((entry) => Number.parseInt(entry, 10))))
-  return allowAllUsers ? ['*', ...normalizedUserIds] : normalizedUserIds
-}
-
-async function saveTelegramConfig(): Promise<void> {
-  const botToken = telegramBotTokenDraft.value.trim()
-  const allowedUserIds = parseTelegramAllowedUserIdsInput(telegramAllowedUserIdsDraft.value)
-  if (!botToken) {
-    telegramConfigError.value = t('Telegram bot token is required.')
-    return
-  }
-  if (allowedUserIds.length === 0) {
-    telegramConfigError.value = t('At least one allowed Telegram user ID or * is required.')
-    return
-  }
-
-  isTelegramSaving.value = true
-  telegramConfigError.value = ''
-  try {
-    await configureTelegramBot(botToken, allowedUserIds)
-    telegramAllowedUserIdsDraft.value = allowedUserIds.map((value) => String(value)).join('\n')
-    await Promise.all([
-      refreshTelegramConfig(),
-      refreshTelegramStatus(),
-    ])
-    window.alert(t('Telegram bot configured. Only allowlisted Telegram users can use the bridge.'))
-  } catch (error) {
-    telegramConfigError.value = error instanceof Error ? error.message : t('Failed to connect Telegram bot')
-    void refreshTelegramStatus()
-  } finally {
-    isTelegramSaving.value = false
-  }
 }
 
 function toggleSidebarSearch(): void {
@@ -2584,289 +2185,6 @@ async function onCopyThreadChat(threadId: string): Promise<void> {
   if (!threadId) return
   if (selectedThreadId.value !== threadId) return
   await copySelectedThreadChat()
-}
-
-function shortAccountId(accountId: string): string {
-  return accountId.length > 8 ? accountId.slice(-8) : accountId
-}
-
-function formatAccountMeta(account: UiAccountEntry): string {
-  const segments = [account.planType || t('unknown')]
-  if (account.authMode) {
-    segments.unshift(account.authMode)
-  }
-  return segments.join(' · ')
-}
-
-function isPaymentRequiredErrorMessage(value: string | null): boolean {
-  if (!value) return false
-  const normalized = value.toLowerCase()
-  return normalized.includes('payment required') || /\b402\b/.test(normalized)
-}
-
-function isAccountUnavailable(account: UiAccountEntry): boolean {
-  return account.unavailableReason === 'payment_required' || isPaymentRequiredErrorMessage(account.quotaError)
-}
-
-function isAccountActionDisabled(account: UiAccountEntry): boolean {
-  return isRefreshingAccounts.value || isSwitchingAccounts.value || isStartingCodexLogin.value || isCompletingCodexLogin.value || removingAccountId.value.length > 0
-    || (account.isActive && removingAccountId.value !== account.storageId && isAccountSwitchBlocked.value)
-}
-
-function isRemoveConfirmationActive(account: UiAccountEntry): boolean {
-  return confirmingRemoveAccountId.value === account.storageId
-}
-
-function isRemoveVisible(account: UiAccountEntry): boolean {
-  return hoveredAccountId.value === account.storageId || isRemoveConfirmationActive(account)
-}
-
-function getAccountSwitchLabel(account: UiAccountEntry): string {
-  if (isAccountUnavailable(account)) return t('Unavailable')
-  if (account.isActive) return t('Active')
-  if (isSwitchingAccounts.value) return t('Switching…')
-  return t('Switch')
-}
-
-function getAccountRemoveLabel(account: UiAccountEntry): string {
-  if (removingAccountId.value === account.storageId) return t('Removing…')
-  if (isRemoveConfirmationActive(account)) return t('Click again to remove')
-  return t('Remove')
-}
-
-function onAccountCardPointerEnter(accountId: string): void {
-  hoveredAccountId.value = accountId
-}
-
-function onAccountCardPointerLeave(accountId: string): void {
-  if (hoveredAccountId.value === accountId) {
-    hoveredAccountId.value = ''
-  }
-  if (removingAccountId.value === accountId) return
-  if (confirmingRemoveAccountId.value === accountId) {
-    confirmingRemoveAccountId.value = ''
-  }
-}
-
-function pickWeeklyQuotaWindow(account: UiAccountEntry) {
-  const quota = account.quotaSnapshot
-  if (!quota) return null
-  const windows = [quota?.primary, quota?.secondary].filter((quotaWindow): quotaWindow is UiRateLimitWindow => quotaWindow !== null)
-  const exactWeekly = windows.find((quotaWindow) => quotaWindow.windowMinutes === 7 * 24 * 60)
-  if (exactWeekly) {
-    return exactWeekly
-  }
-  const longerWindow = windows
-    .filter((quotaWindow) => typeof quotaWindow.windowMinutes === 'number' && quotaWindow.windowMinutes >= 7 * 24 * 60)
-    .sort((first, second) => (first.windowMinutes ?? 0) - (second.windowMinutes ?? 0))[0] ?? null
-  if (longerWindow) {
-    return longerWindow
-  }
-  return quota.secondary ?? null
-}
-
-function formatResetDateCompact(resetsAt: number | null): string {
-  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return ''
-  const date = new Date(resetsAt * 1000)
-  return `${date.getMonth() + 1}月${date.getDate()}日`
-}
-
-function formatAccountQuota(account: UiAccountEntry): string {
-  if (isAccountUnavailable(account)) {
-    return account.quotaError || t('402 Payment Required')
-  }
-  const quota = account.quotaSnapshot
-  const window = pickWeeklyQuotaWindow(account)
-  const fallbackWindow = quota?.primary ?? quota?.secondary ?? null
-  const displayWindow = window ?? fallbackWindow
-  if (displayWindow) {
-    const remainingPercent = Math.max(0, Math.min(100, 100 - Math.round(displayWindow.usedPercent)))
-    const refreshDate = formatResetDateCompact(displayWindow.resetsAt)
-    return refreshDate
-      ? `${remainingPercent}% ${t('weekly remaining')} · ${refreshDate}`
-      : `${remainingPercent}% ${t('weekly remaining')}`
-  }
-  if (quota?.credits?.unlimited) {
-    return t('Unlimited credits')
-  }
-  if (quota?.credits?.hasCredits && quota.credits.balance) {
-    return `${quota.credits.balance} ${t('credits')}`
-  }
-  if (account.quotaStatus === 'loading') {
-    return t('Loading quota…')
-  }
-  if (account.quotaStatus === 'error') {
-    return account.quotaError || t('Quota unavailable')
-  }
-  if (account.quotaStatus === 'ready' || account.quotaStatus === 'idle') {
-    return t('Quota unavailable')
-  }
-  return t('Fetching account details…')
-}
-
-function buildAccountTitle(account: UiAccountEntry): string {
-  return [
-    account.email || t('Account'),
-    formatAccountMeta(account),
-    isAccountUnavailable(account) ? t('Unavailable account') : null,
-    formatAccountQuota(account),
-    `${t('Workspace')} ${account.accountId}`,
-  ].filter(Boolean).join('\n')
-}
-
-async function loadAccountsState(options: { silent?: boolean } = {}): Promise<void> {
-  try {
-    const result = await getAccounts()
-    accounts.value = result.accounts
-    if (!result.accounts.some((account) => account.storageId === hoveredAccountId.value)) {
-      hoveredAccountId.value = ''
-    }
-    if (!result.accounts.some((account) => account.storageId === confirmingRemoveAccountId.value)) {
-      confirmingRemoveAccountId.value = ''
-    }
-  } catch (error) {
-    if (options.silent === true) return
-    accountActionError.value = error instanceof Error ? error.message : t('Failed to load accounts')
-  }
-}
-
-async function onRefreshAccounts(): Promise<void> {
-  if (isRefreshingAccounts.value || isSwitchingAccounts.value || isStartingCodexLogin.value || isCompletingCodexLogin.value) return
-  accountActionError.value = ''
-  hoveredAccountId.value = ''
-  confirmingRemoveAccountId.value = ''
-  isRefreshingAccounts.value = true
-  try {
-    const result = await refreshAccountsFromAuth()
-    accounts.value = result.accounts
-    stopPolling()
-    startPolling()
-    void refreshAll({
-      includeSelectedThreadMessages: true,
-    })
-  } catch (error) {
-    accountActionError.value = error instanceof Error ? error.message : t('Failed to refresh accounts')
-  } finally {
-    isRefreshingAccounts.value = false
-  }
-}
-
-async function onSwitchAccount(storageId: string): Promise<void> {
-  if (isSwitchingAccounts.value || isRefreshingAccounts.value || isStartingCodexLogin.value || isCompletingCodexLogin.value) return
-  if (isAccountSwitchBlocked.value) {
-    accountActionError.value = t('Finish the current turn and pending requests before switching accounts.')
-    return
-  }
-  accountActionError.value = ''
-  hoveredAccountId.value = ''
-  confirmingRemoveAccountId.value = ''
-  isSwitchingAccounts.value = true
-  try {
-    const nextActiveAccount = await switchAccount(storageId)
-    accounts.value = accounts.value.map((account) => (
-      account.storageId === storageId
-        ? nextActiveAccount
-        : { ...account, isActive: false }
-    ))
-    stopPolling()
-    startPolling()
-    void refreshAll({
-      includeSelectedThreadMessages: true,
-    })
-    void loadAccountsState({ silent: true })
-  } catch (error) {
-    accountActionError.value = error instanceof Error ? error.message : t('Failed to switch account')
-  } finally {
-    isSwitchingAccounts.value = false
-  }
-}
-
-async function onStartCodexLogin(): Promise<void> {
-  if (isRefreshingAccounts.value || isSwitchingAccounts.value || isStartingCodexLogin.value || isCompletingCodexLogin.value) return
-  accountActionError.value = ''
-  codexLoginCallbackUrl.value = ''
-  isStartingCodexLogin.value = true
-  try {
-    const loginUrl = await startCodexLogin()
-    codexLoginUrl.value = loginUrl
-    isCodexLoginModalOpen.value = true
-    window.open(loginUrl, '_blank', 'noopener,noreferrer')
-    await nextTick()
-    codexLoginCallbackInputRef.value?.focus()
-  } catch (error) {
-    accountActionError.value = error instanceof Error ? error.message : t('Failed to start Codex login')
-  } finally {
-    isStartingCodexLogin.value = false
-  }
-}
-
-function onCancelCodexLoginModal(): void {
-  if (isCompletingCodexLogin.value) return
-  isCodexLoginModalOpen.value = false
-  codexLoginCallbackUrl.value = ''
-}
-
-async function onSubmitCodexLoginCallback(): Promise<void> {
-  const callbackUrl = codexLoginCallbackUrl.value.trim()
-  if (!callbackUrl) return
-  await completeCodexLoginFromCallback(callbackUrl)
-}
-
-async function completeCodexLoginFromCallback(callbackUrl: string): Promise<void> {
-  if (isCompletingCodexLogin.value || callbackUrl.length === 0) return
-  accountActionError.value = ''
-  isCompletingCodexLogin.value = true
-  try {
-    const result = await completeCodexLogin(callbackUrl)
-    accounts.value = result.accounts
-    codexLoginUrl.value = ''
-    codexLoginCallbackUrl.value = ''
-    isCodexLoginModalOpen.value = false
-    stopPolling()
-    startPolling()
-    void refreshAll({
-      includeSelectedThreadMessages: true,
-    })
-  } catch (error) {
-    accountActionError.value = error instanceof Error ? error.message : t('Failed to complete Codex login')
-  } finally {
-    isCompletingCodexLogin.value = false
-  }
-}
-
-async function onRemoveAccount(storageId: string): Promise<void> {
-  if (isRefreshingAccounts.value || isSwitchingAccounts.value || isStartingCodexLogin.value || isCompletingCodexLogin.value || removingAccountId.value.length > 0) return
-  const targetAccount = accounts.value.find((account) => account.storageId === storageId) ?? null
-  if (!targetAccount) return
-  if (confirmingRemoveAccountId.value !== storageId) {
-    confirmingRemoveAccountId.value = storageId
-    return
-  }
-  if (targetAccount.isActive && isAccountSwitchBlocked.value) {
-    accountActionError.value = t('Finish the current turn and pending requests before removing the active account.')
-    return
-  }
-
-  const removedWasActive = targetAccount.isActive
-  accountActionError.value = ''
-  confirmingRemoveAccountId.value = ''
-  removingAccountId.value = storageId
-  try {
-    const result = await removeAccount(storageId)
-    accounts.value = result.accounts
-    stopPolling()
-    startPolling()
-    if (removedWasActive) {
-      void refreshAll({
-        includeSelectedThreadMessages: true,
-      })
-    }
-    void loadAccountsState({ silent: true })
-  } catch (error) {
-    accountActionError.value = error instanceof Error ? error.message : t('Failed to remove account')
-  } finally {
-    removingAccountId.value = ''
-  }
 }
 
 function onArchiveThread(threadId: string): void {
@@ -4531,6 +3849,8 @@ function toggleDictationAutoSend(): void {
 
 async function onProviderChange(provider: string): Promise<void> {
   if (freeModeLoading.value) return
+  const previousProvider = selectedProvider.value
+  const previousEnabled = freeModeEnabled.value
   freeModeLoading.value = true
   try {
     if (provider === 'codex') {
@@ -4539,12 +3859,11 @@ async function onProviderChange(provider: string): Promise<void> {
       freeModeEnabled.value = result.enabled
     } else if (provider === 'openrouter') {
       selectedProvider.value = 'openrouter'
-      const result = await setFreeMode(true)
-      freeModeEnabled.value = result.enabled
       await setCustomProvider('', '', {
         wireApi: openRouterWireApi.value,
         provider: 'openrouter',
       })
+      freeModeEnabled.value = true
     } else if (provider === 'opencode-zen') {
       selectedProvider.value = 'opencode-zen'
       await setCustomProvider('', opencodeZenKey.value.trim(), {
@@ -4564,6 +3883,9 @@ async function onProviderChange(provider: string): Promise<void> {
     providerError.value = ''
     await refreshAll({ includeSelectedThreadMessages: false, providerChanged: true, awaitAncillaryRefreshes: true })
   } catch (err) {
+    selectedProvider.value = previousProvider
+    freeModeEnabled.value = previousEnabled
+    await loadFreeModeStatus()
     providerError.value = err instanceof Error ? err.message : 'Failed to switch provider'
   } finally {
     freeModeLoading.value = false
@@ -4683,23 +4005,11 @@ async function loadFreeModeStatus(): Promise<void> {
     } else {
       selectedProvider.value = 'codex'
     }
-    externalCodexAuthAvailable = status.hasCodexAuth === true
-    if (!externalCodexAuthAvailable) {
-      externalAuthImportAttempted = false
-    }
     const providerChanged = selectedProvider.value !== previousProvider
     if (providerChanged) {
       await refreshAll({
         includeSelectedThreadMessages: false,
         providerChanged: true,
-        awaitAncillaryRefreshes: true,
-      })
-    }
-    const importedExternalAuth = await maybeImportExternalCodexAuthAccount()
-    if (importedExternalAuth) {
-      await refreshAll({
-        includeSelectedThreadMessages: false,
-        providerChanged: providerChanged || importedExternalAuth,
         awaitAncillaryRefreshes: true,
       })
     }
@@ -4792,22 +4102,6 @@ function saveSidebarCollapsed(value: boolean): void {
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, value ? '1' : '0')
 }
 
-function loadAccountsSectionCollapsed(): boolean {
-  if (typeof window === 'undefined') return true
-  const value = window.localStorage.getItem(ACCOUNTS_SECTION_COLLAPSED_STORAGE_KEY)
-  if (value === null) return true
-  return value === '1'
-}
-
-function toggleAccountsSectionCollapsed(): void {
-  isAccountsSectionCollapsed.value = !isAccountsSectionCollapsed.value
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(
-    ACCOUNTS_SECTION_COLLAPSED_STORAGE_KEY,
-    isAccountsSectionCollapsed.value ? '1' : '0',
-  )
-}
-
 function normalizeMessageType(rawType: string | undefined, role: string): string {
   const normalized = (rawType ?? '').trim()
   if (normalized.length > 0) {
@@ -4832,7 +4126,6 @@ async function initialize(): Promise<void> {
   await refreshAll({
     includeSelectedThreadMessages: route.name === 'thread',
   })
-  void loadAccountsState({ silent: true })
   await applyLaunchProjectPathFromUrl()
   hasInitialized.value = true
   await syncThreadSelectionWithRoute()
@@ -6402,7 +5695,15 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-settings-rate-limits {
-  @apply border-t border-zinc-200 px-2 pt-2;
+  @apply border-b border-zinc-200 p-3;
+}
+
+.sidebar-settings-quota-title {
+  @apply mb-2 text-sm font-medium text-zinc-700;
+}
+
+.sidebar-settings-quota-empty {
+  @apply text-xs text-zinc-500;
 }
 
 .sidebar-settings-build-label {

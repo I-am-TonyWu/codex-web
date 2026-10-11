@@ -1,7 +1,16 @@
 <template>
   <section v-mermaid class="conversation-root" @mermaid-resize="onPendingImageSettled" @contextmenu.capture="onConversationContextMenu">
-    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="emit('retryWriter', activeThreadId)" />
+    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="emit('retryWriter', activeThreadId)" @status-known="controlStatusKnown = $event" />
     <a v-if="cwd" class="conversation-files-link" :href="toBrowseUrl(cwd)" target="_blank" rel="noopener">查看 / 下载项目文件</a>
+    <aside v-if="activeThreadId" class="task-status-bar" :data-state="taskState.kind" aria-label="任务状态">
+      <div class="task-status-copy" role="status" aria-live="polite" aria-atomic="true">
+        <span class="task-status-dot" aria-hidden="true" />
+        <strong>{{ taskState.label }}</strong>
+        <span v-if="taskState.detail" class="task-status-detail">{{ taskState.detail }}</span>
+      </div>
+      <button v-if="taskState.kind === 'waiting' || taskState.kind === 'failed'" type="button" class="task-status-action" @click="jumpToLatest">{{ taskState.kind === 'waiting' ? '查看待处理项' : '查看详情' }}</button>
+      <button v-else-if="showJumpToLatestButton" type="button" class="task-status-action" @click="jumpToLatest">回到最新</button>
+    </aside>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
@@ -24,96 +33,14 @@
       </li>
       <template v-for="message in visibleMessages" :key="message.id">
       <li
-        v-if="!hiddenGroupedCommandIds.has(message.id) && !hiddenFileChangeMessageIds.has(message.id)"
+        v-if="!hiddenProcessIds.has(message.id) && !hiddenFileChangeMessageIds.has(message.id)"
         class="conversation-item"
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
       >
-        <div v-if="isCommandMessage(message)" class="message-row" data-role="system">
+        <div v-if="processGroups.has(message.id)" class="message-row" data-role="system">
           <div class="message-stack" data-role="system">
-            <button
-              v-if="getGroupedCommandsForLatest(message).length > 0"
-              type="button"
-              class="cmd-row cmd-row-group cmd-compact"
-              :class="[commandStatusClass(message), { 'cmd-expanded': isCommandGroupExpanded(message) }]"
-              @click="toggleCommandGroup(message)"
-            >
-              <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandGroupExpanded(message) }">▶</span>
-              <span class="cmd-group-label">{{ commandGroupSummaryLabel(message) }}</span>
-              <span class="cmd-status">{{ commandGroupSummaryStatus(message) }}</span>
-            </button>
-            <div
-              v-if="getGroupedCommandsForLatest(message).length > 0"
-              class="cmd-group-wrap"
-              :class="{ 'cmd-group-visible': isCommandGroupExpanded(message) }"
-            >
-              <div class="cmd-group-inner">
-                <div
-                  v-for="cmd in getCommandBlockForLatest(message)"
-                  :key="`grouped-cmd-${cmd.id}`"
-                  class="worked-cmd-item"
-                >
-                  <button
-                    type="button"
-                    class="cmd-row"
-                    :class="[
-                      commandStatusClass(cmd),
-                      {
-                        'cmd-expanded': isCommandExpanded(cmd),
-                        'cmd-compact': true,
-                      },
-                    ]"
-                    @click="toggleCommandExpand(cmd)"
-                  >
-                    <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandExpanded(cmd) }">▶</span>
-                    <code class="cmd-label">{{ cmd.commandExecution?.command || '(command)' }}</code>
-                    <span class="cmd-status">{{ commandStatusLabel(cmd) }}</span>
-                  </button>
-                  <div
-                    class="cmd-output-wrap"
-                    :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
-                  >
-                    <div class="cmd-output-inner">
-                      <pre
-                        class="cmd-output"
-                        :class="{ 'cmd-output-condensed': isCommandOutputCondensed(cmd) }"
-                        v-text="cmd.commandExecution?.aggregatedOutput || '(no output)'"
-                      ></pre>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <template v-else>
-              <button
-                type="button"
-                class="cmd-row"
-                :class="[
-                  commandStatusClass(message),
-                  {
-                    'cmd-expanded': isCommandExpanded(message),
-                    'cmd-compact': isCommandCompact(message),
-                  },
-                ]"
-                @click="toggleCommandExpand(message)"
-              >
-                <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandExpanded(message) }">▶</span>
-                <code class="cmd-label">{{ message.commandExecution?.command || '(command)' }}</code>
-                <span class="cmd-status">{{ commandStatusLabel(message) }}</span>
-              </button>
-              <div
-                class="cmd-output-wrap"
-                :class="{ 'cmd-output-visible': isCommandExpanded(message) }"
-              >
-                <div class="cmd-output-inner">
-                  <pre
-                    class="cmd-output"
-                    :class="{ 'cmd-output-condensed': isCommandOutputCondensed(message) }"
-                    v-text="message.commandExecution?.aggregatedOutput || '(no output)'"
-                  ></pre>
-                </div>
-              </div>
-            </template>
+            <ThreadActivityGroup :messages="processGroups.get(message.id)!" @open-image="openImageModal" @resize="onPendingImageSettled" />
           </div>
         </div>
 
@@ -220,16 +147,16 @@
               <ul
                 v-if="message.images && message.images.length > 0"
                 class="message-image-list"
-                :class="{ 'message-generated-image-list': message.messageType === 'imageView' }"
+                :class="{ 'message-generated-image-list': message.messageType === 'imageGeneration' }"
                 :data-role="message.role"
               >
                 <li v-for="imageUrl in message.images" :key="imageUrl" class="message-image-item">
                   <button class="message-image-button" type="button" @click="openImageModal(imageUrl)">
                     <img
                       class="message-image-preview"
-                      :class="{ 'message-generated-image-preview': message.messageType === 'imageView' }"
+                      :class="{ 'message-generated-image-preview': message.messageType === 'imageGeneration' }"
                       :src="imageUrl"
-                      :alt="message.messageType === 'imageView' ? 'Generated image' : 'Message image preview'"
+                      :alt="message.messageType === 'imageGeneration' ? 'Generated image' : 'Message image preview'"
                       loading="lazy"
                     />
                   </button>
@@ -750,12 +677,10 @@
           <div class="message-stack">
             <article class="live-overlay-inline" aria-live="polite">
               <p class="live-overlay-label">{{ liveOverlay.activityLabel }}</p>
-              <p
-                v-if="liveOverlay.reasoningText"
-                class="live-overlay-reasoning"
-              >
-                {{ liveOverlay.reasoningText }}
-              </p>
+              <details v-if="liveOverlay.reasoningText" class="live-reasoning-details">
+                <summary>查看思考过程</summary>
+                <p class="live-overlay-reasoning">{{ liveOverlay.reasoningText }}</p>
+              </details>
               <div v-if="liveOverlay.errorText" class="live-overlay-error">
                 <span>{{ liveOverlay.errorText }}</span>
                 <button v-if="isThreadWriterConflict(liveOverlay.errorText)" type="button"
@@ -949,6 +874,9 @@ import { useMobile } from '../../composables/useMobile'
 import { copyTextToClipboard, copyTextWithSelectionFallback } from '../../utils/clipboard'
 import MermaidDiagram from './MermaidDiagram.vue'
 import ConversationControlBar from './ConversationControlBar.vue'
+import ThreadActivityGroup from './ThreadActivityGroup.vue'
+import { groupProcessMessages, taskPresentation } from '../../utils/conversationPresentation'
+import { conversationStates } from '../../api/conversationControl'
 import { isMermaidLanguage } from '../../utils/mermaidRenderer'
 import { vMermaid } from '../../utils/mermaidDirective'
 
@@ -962,8 +890,8 @@ import IconTablerX from '../icons/IconTablerX.vue'
 type HighlightJsModule = (typeof import('highlight.js/lib/common'))['default']
 
 const expandedCommandIds = ref<Set<string>>(new Set())
+const controlStatusKnown = ref(false)
 const collapsedAutoCommandIds = ref<Set<string>>(new Set())
-const expandedCommandGroupIds = ref<Set<string>>(new Set())
 const expandedWorkedIds = ref<Set<string>>(new Set())
 const expandedFileChangeSummaryIds = ref<Set<string>>(new Set())
 const activeDiffViewerSummary = ref<TurnFileChangeSummary | null>(null)
@@ -1115,36 +1043,28 @@ const isLiveTurnRuntime = computed(() =>
   Boolean(props.liveOverlay) || activeCommandMessageId.value.length > 0 || hasLiveAssistantText.value,
 )
 
-const groupedCommandsByLatestId = computed<Record<string, UiMessage[]>>(() => {
-  const next: Record<string, UiMessage[]> = {}
-  for (let index = 0; index < props.messages.length;) {
-    const message = props.messages[index]
-    if (!isCommandMessage(message)) {
-      index += 1
-      continue
-    }
-
-    const block: UiMessage[] = []
-    while (index < props.messages.length && isCommandMessage(props.messages[index])) {
-      block.push(props.messages[index])
-      index += 1
-    }
-
-    if (block.length <= 1) continue
-    const latest = block[block.length - 1]
-    next[latest.id] = block.slice(0, -1)
+const processGroups = computed(() => groupProcessMessages(props.messages))
+const hiddenProcessIds = computed(() => {
+  const ids = new Set<string>()
+  for (const block of processGroups.value.values()) {
+    for (const message of block.slice(1)) ids.add(message.id)
   }
-  return next
+  return ids
 })
-
-const hiddenGroupedCommandIds = computed(() => {
-  const next = new Set<string>()
-  for (const commands of Object.values(groupedCommandsByLatestId.value)) {
-    for (const command of commands) {
-      next.add(command.id)
-    }
-  }
-  return next
+const taskState = computed(() => {
+  const control = conversationStates[props.activeThreadId]
+  return taskPresentation({
+    messages: props.messages,
+    running: props.isRunning ?? (control?.activity === 'running' || hasLiveAssistantText.value),
+    sending: props.isSending,
+    loading: props.isLoading,
+    pending: props.pendingRequests.length > 0 || control?.activity === 'approval',
+    error: props.liveOverlay?.errorText,
+    activity: control?.activity,
+    transferring: control?.transferring,
+    turnStatus: props.turnStatus,
+    connectionUncertain: !controlStatusKnown.value,
+  })
 })
 
 function readPlanExplanation(message: UiMessage): string {
@@ -1167,7 +1087,7 @@ function planStepStatusIcon(status: UiPlanStep['status']): string {
 }
 
 function isCommandAutoExpanded(message: UiMessage): boolean {
-  return !hasLiveAssistantText.value && message.id === activeCommandMessageId.value
+  return false
 }
 
 function isCommandExpanded(message: UiMessage): boolean {
@@ -1204,40 +1124,6 @@ function toggleCommandExpand(message: UiMessage): void {
 
   expandedCommandIds.value = nextExpanded
   collapsedAutoCommandIds.value = nextCollapsedAuto
-}
-
-function getGroupedCommandsForLatest(message: UiMessage): UiMessage[] {
-  return groupedCommandsByLatestId.value[message.id] ?? []
-}
-
-function getCommandBlockForLatest(message: UiMessage): UiMessage[] {
-  if (!isCommandMessage(message)) return []
-  return [...getGroupedCommandsForLatest(message), message]
-}
-
-function toggleCommandGroup(message: UiMessage): void {
-  const groupedCommands = getGroupedCommandsForLatest(message)
-  if (groupedCommands.length === 0) return
-  const next = new Set(expandedCommandGroupIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
-  expandedCommandGroupIds.value = next
-}
-
-function isCommandGroupExpanded(message: UiMessage): boolean {
-  return expandedCommandGroupIds.value.has(message.id)
-}
-
-function commandGroupSummaryLabel(message: UiMessage): string {
-  const commands = getCommandBlockForLatest(message)
-  const count = commands.length
-  const latestCommand = message.commandExecution?.command?.trim() || '(command)'
-  const countLabel = count === 1 ? '1 command' : `${count} commands`
-  return `${countLabel} · latest: ${latestCommand}`
-}
-
-function commandGroupSummaryStatus(message: UiMessage): string {
-  return commandStatusLabel(message)
 }
 
 function toggleWorkedExpand(message: UiMessage): void {
@@ -1339,6 +1225,9 @@ const props = defineProps<{
   pendingRequests: UiServerRequest[]
   liveOverlay: UiLiveOverlay | null
   isLoading: boolean
+  isRunning?: boolean
+  isSending?: boolean
+  turnStatus?: UiMessage['turnStatus']
   activeThreadId: string
   cwd: string
   isContinuingOnWeb?: boolean
@@ -1466,7 +1355,8 @@ const LOAD_MORE_SCROLL_THRESHOLD_PX = 200
 const renderWindowStart = ref(0)
 const isLoadingMore = ref(false)
 
-const visibleMessages = computed(() => props.messages.slice(renderWindowStart.value))
+const presentedMessages = computed(() => props.messages.filter(message => !hiddenProcessIds.value.has(message.id) && !hiddenFileChangeMessageIds.value.has(message.id)))
+const visibleMessages = computed(() => presentedMessages.value.slice(renderWindowStart.value))
 const hasMoreAbove = computed(() => renderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
 
 const showJumpToLatestButton = computed(
@@ -2210,10 +2100,7 @@ function summarizeFileChangeKinds(summary: TurnFileChangeSummary | null): string
 }
 
 function fileChangeSummaryLabel(summary: TurnFileChangeSummary | null): string {
-  if (!summary || summary.changes.length === 0) return 'Modified files'
-  const countLabel = formatFileChangeCountLabel(summary.changes.length)
-  const kindSummary = summarizeFileChangeKinds(summary)
-  return kindSummary ? `${countLabel} · ${kindSummary}` : countLabel
+  return summary?.changes.length ? `修改了 ${summary.changes.length} 个文件` : '修改了文件'
 }
 
 function fileChangeSummaryStatusParts(summary: TurnFileChangeSummary | null): FileChangeDeltaPart[] {
@@ -4364,10 +4251,6 @@ watch(
     )
     expandedCommandIds.value = pruneCommandIdSet(expandedCommandIds.value, commandIds)
     collapsedAutoCommandIds.value = pruneCommandIdSet(collapsedAutoCommandIds.value, commandIds)
-    expandedCommandGroupIds.value = pruneCommandIdSet(
-      expandedCommandGroupIds.value,
-      new Set(Object.keys(groupedCommandsByLatestId.value)),
-    )
     expandedFileChangeSummaryIds.value = pruneCommandIdSet(
       expandedFileChangeSummaryIds.value,
       new Set([
@@ -4382,9 +4265,9 @@ watch(
     // Scrolled up: only clamp downward so renderWindowStart never exceeds the list length
     //   (prevents visibleMessages from becoming empty after a rollback).
     if (autoFollowOutput.value) {
-      renderWindowStart.value = Math.max(0, next.length - RENDER_WINDOW_SIZE)
+      renderWindowStart.value = Math.max(0, presentedMessages.value.length - RENDER_WINDOW_SIZE)
     } else {
-      renderWindowStart.value = Math.min(renderWindowStart.value, Math.max(0, next.length - 1))
+      renderWindowStart.value = Math.min(renderWindowStart.value, Math.max(0, presentedMessages.value.length - 1))
     }
 
     await scheduleConversationScroll()
@@ -4436,7 +4319,7 @@ watch(
   () => props.isLoading,
   async (loading) => {
     if (loading) return
-    renderWindowStart.value = Math.max(0, props.messages.length - RENDER_WINDOW_SIZE)
+    renderWindowStart.value = Math.max(0, presentedMessages.value.length - RENDER_WINDOW_SIZE)
     await scheduleConversationScroll()
   },
 )
@@ -4445,13 +4328,16 @@ watch(
   () => props.activeThreadId,
   async () => {
     autoFollowOutput.value = true
+    expandedCommandIds.value = new Set()
+    collapsedAutoCommandIds.value = new Set()
+    expandedWorkedIds.value = new Set()
     modalImageUrl.value = ''
     isLoadingMore.value = false
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
     fileChangeRedoPatchIds.value = {}
     // Apply immediately for cached threads where isLoading never toggles.
-    renderWindowStart.value = Math.max(0, props.messages.length - RENDER_WINDOW_SIZE)
+    renderWindowStart.value = Math.max(0, presentedMessages.value.length - RENDER_WINDOW_SIZE)
     await scheduleConversationScroll()
   },
   { flush: 'post' },
@@ -4519,6 +4405,22 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @reference "tailwindcss";
+
+
+.task-status-bar { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 16px 12px; padding: 9px 12px; border-radius: 9px; background: var(--activity-bg, #f1f5f9); color: var(--activity-text, #334155); font-size: 13px; }
+.task-status-copy { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; line-height: 1.5; }
+.task-status-copy strong { font-weight: 600; }
+.task-status-detail { color: var(--activity-muted, #64748b); }
+.task-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; flex-shrink: 0; }
+[data-state='running'] .task-status-dot { background: #d97706; animation: task-pulse 1.4s ease-in-out infinite; }
+[data-state='completed'] .task-status-dot { background: #10b981; }
+[data-state='waiting'] .task-status-dot { background: #f59e0b; }
+[data-state='failed'] .task-status-dot { background: #f43f5e; }
+.task-status-action { flex-shrink: 0; padding: 4px 7px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.task-status-action:hover { background: rgb(128 128 128 / 12%); }
+@keyframes task-pulse { 50% { opacity: .35; } }
+@media (max-width: 480px) { .task-status-bar { margin: 4px 10px 8px; } .task-status-detail { flex-basis: 100%; margin-left: 14px; font-size: 12px; } }
+@media (prefers-reduced-motion: reduce) { [data-state='running'] .task-status-dot { animation: none; } }
 
 .conversation-root {
   @apply relative h-full min-h-0 min-w-0 p-0 flex flex-col overflow-y-hidden overflow-x-hidden bg-transparent border-none rounded-none;

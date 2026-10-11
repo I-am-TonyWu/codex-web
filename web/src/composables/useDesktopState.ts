@@ -659,6 +659,7 @@ function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
     arePlanDataEqual(first.plan, second.plan) &&
     first.turnId === second.turnId &&
     first.turnIndex === second.turnIndex &&
+    first.turnStatus === second.turnStatus &&
     first.isAutomationRun === second.isAutomationRun &&
     first.automationDisplayName === second.automationDisplayName
   )
@@ -816,6 +817,7 @@ function upsertMessage(previous: UiMessage[], nextMessage: UiMessage): UiMessage
 type TurnSummaryState = {
   turnId: string
   durationMs: number
+  status?: UiMessage['turnStatus']
 }
 
 type TurnActivityState = {
@@ -876,7 +878,7 @@ function formatTurnDuration(durationMs: number): string {
 function areTurnSummariesEqual(first?: TurnSummaryState, second?: TurnSummaryState): boolean {
   if (!first && !second) return true
   if (!first || !second) return false
-  return first.turnId === second.turnId && first.durationMs === second.durationMs
+  return first.turnId === second.turnId && first.durationMs === second.durationMs && first.status === second.status
 }
 
 function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivityState): boolean {
@@ -897,6 +899,7 @@ function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
     text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
     messageType: WORKED_MESSAGE_TYPE,
     turnId: summary.turnId,
+    turnStatus: summary.status,
   }
 }
 
@@ -1606,6 +1609,11 @@ export function useDesktopState() {
   const selectedThreadTerminalOpen = computed(() => {
     const threadId = selectedThreadId.value
     return Boolean(threadId && terminalOpenByThreadId.value[threadId] === true)
+  })
+  const selectedThreadTaskStatus = computed(() => {
+    const threadId = selectedThreadId.value
+    if (inProgressById.value[threadId]) return 'inProgress' as const
+    return turnSummaryByThreadId.value[threadId]?.status ?? persistedMessagesByThreadId.value[threadId]?.at(-1)?.turnStatus
   })
   const isSelectedThreadInterruptPending = computed(() => {
     const threadId = selectedThreadId.value
@@ -3637,7 +3645,7 @@ export function useDesktopState() {
         role: 'assistant',
         text: '',
         images: [toLocalImageUrl(path)],
-        messageType: 'imageView',
+        messageType: item.imagePurpose === 'generated' ? 'imageGeneration' : 'imageView',
       }
     }
     if (item.type !== 'imageGeneration' && item.type !== 'image_generation') return null
@@ -3649,7 +3657,7 @@ export function useDesktopState() {
       role: 'assistant',
       text: '',
       images: [imageUrl],
-      messageType: 'imageView',
+      messageType: 'imageGeneration',
 
     }
   }
@@ -3901,6 +3909,7 @@ export function useDesktopState() {
       setTurnSummaryForThread(completedTurn.threadId, {
         turnId: completedTurn.turnId,
         durationMs,
+        status: readString(asRecord(asRecord(notification.params)?.turn)?.status) as UiMessage['turnStatus'],
       })
       if (activeTurnIdByThreadId.value[completedTurn.threadId]) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)
@@ -5852,6 +5861,7 @@ export function useDesktopState() {
     isSelectedThreadInterruptPending,
     selectedThreadServerRequests,
     selectedLiveOverlay,
+    selectedThreadTaskStatus,
     codexQuota,
     selectedThreadId,
     availableCollaborationModes,

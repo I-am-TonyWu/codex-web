@@ -4,117 +4,55 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { refreshChatgptAuthTokensForExternalAuth } from './codexAppServerBridge'
 
-const originalCodexHome = process.env.CODEX_HOME
-const originalRefreshUrlOverride = process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE
-const tempDirs: string[] = []
-
-function restoreEnvValue(key: string, value: string | undefined): void {
-  if (typeof value === 'string') {
-    process.env[key] = value
-    return
-  }
-  delete process.env[key]
+const originalHome = process.env.CODEX_HOME
+const homes: string[] = []
+function jwt(claims: unknown) { return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture` }
+async function fixture(tokens: Record<string, string>) {
+  const home = await mkdtemp(join(tmpdir(), 'codex-web-auth-readonly-'))
+  homes.push(home); process.env.CODEX_HOME = home
+  const raw = JSON.stringify({ auth_mode: 'chatgpt', tokens })
+  await writeFile(join(home, 'auth.json'), raw)
+  return { path: join(home, 'auth.json'), raw }
 }
-
-function base64UrlJson(value: unknown): string {
-  return Buffer.from(JSON.stringify(value), 'utf8')
-    .toString('base64')
-    .replace(/=/gu, '')
-    .replace(/\+/gu, '-')
-    .replace(/\//gu, '_')
-}
-
-function unsignedJwt(payload: unknown): string {
-  return `${base64UrlJson({ alg: 'none', typ: 'JWT' })}.${base64UrlJson(payload)}.signature`
-}
-
-async function createCodexHome(auth: unknown): Promise<string> {
-  const codexHome = await mkdtemp(join(tmpdir(), 'codexui-auth-refresh-'))
-  tempDirs.push(codexHome)
-  await writeFile(join(codexHome, 'auth.json'), JSON.stringify(auth, null, 2), 'utf8')
-  process.env.CODEX_HOME = codexHome
-  return codexHome
-}
-
 afterEach(async () => {
-  restoreEnvValue('CODEX_HOME', originalCodexHome)
-  restoreEnvValue('CODEX_REFRESH_TOKEN_URL_OVERRIDE', originalRefreshUrlOverride)
+  if (originalHome === undefined) delete process.env.CODEX_HOME
+  else process.env.CODEX_HOME = originalHome
   vi.unstubAllGlobals()
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  await Promise.all(homes.splice(0).map(home => rm(home, {recursive:true, force:true})))
 })
-
-describe('ChatGPT auth token refresh', () => {
-  it('refreshes external ChatGPT auth tokens and persists auth.json', async () => {
-    const codexHome = await createCodexHome({
-      auth_mode: 'chatgpt',
-      tokens: {
-        access_token: 'expired-access-token',
-        refresh_token: 'refresh-old',
-        id_token: 'id-old',
-        account_id: 'acct-old',
-      },
-    })
-    process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE = 'https://example.test/oauth/token'
-    const accessToken = unsignedJwt({
-      'https://api.openai.com/auth': {
-        chatgpt_account_id: 'acct-new',
-        chatgpt_plan_type: 'pro',
-      },
-    })
-    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
-      access_token: accessToken,
-      refresh_token: 'refresh-new',
-      id_token: 'id-new',
-    }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const result = await refreshChatgptAuthTokensForExternalAuth({
-      reason: 'unauthorized',
-      previousAccountId: 'acct-old',
-    })
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] ?? []
-    expect(url).toBe('https://example.test/oauth/token')
-    expect(init?.method).toBe('POST')
-    expect(init?.headers).toEqual({ 'Content-Type': 'application/x-www-form-urlencoded' })
-    const body = new URLSearchParams(String(init?.body ?? ''))
-    expect(body.get('grant_type')).toBe('refresh_token')
-    expect(body.get('refresh_token')).toBe('refresh-old')
-    expect(body.get('client_id')).toBe('app_EMoamEEZ73f0CkXaXp7hrann')
-    expect(result).toEqual({
-      accessToken,
-      chatgptAccountId: 'acct-new',
-      chatgptPlanType: 'pro',
-    })
-
-    const updatedAuth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8')) as {
-      auth_mode?: string
-      last_refresh?: number
-      tokens?: Record<string, string>
-    }
-    expect(updatedAuth.auth_mode).toBe('chatgpt')
-    expect(typeof updatedAuth.last_refresh).toBe('number')
-    expect(updatedAuth.tokens?.access_token).toBe(accessToken)
-    expect(updatedAuth.tokens?.refresh_token).toBe('refresh-new')
-    expect(updatedAuth.tokens?.id_token).toBe('id-new')
-    expect(updatedAuth.tokens?.account_id).toBe('acct-new')
-  })
-
-  it('asks for sign-in when auth.json has no ChatGPT refresh token', async () => {
-    await createCodexHome({
-      auth_mode: 'chatgpt',
-      tokens: {
-        access_token: 'expired-access-token',
-        account_id: 'acct-old',
-      },
-    })
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(refreshChatgptAuthTokensForExternalAuth()).rejects.toThrow(
-      'No ChatGPT refresh token is available. Please sign in again.',
-    )
+describe('host-owned login credentials', () => {
+  it('reuses only the current access token, without OAuth or credential writes', async () => {
+    const accessToken = jwt({ exp: Date.now()/1000+3600, 'https://api.openai.com/auth': {chatgpt_account_id:'host', chatgpt_plan_type:'plus'} })
+    const file = await fixture({access_token:accessToken, refresh_token:'never-use', account_id:'host'})
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    expect(await refreshChatgptAuthTokensForExternalAuth({previousAccountId:'host'})).toEqual({accessToken, chatgptAccountId:'host', chatgptPlanType:'plus'})
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(await readFile(file.path, 'utf8')).toBe(file.raw)
+  })
+  it('does not require or rotate a refresh token', async () => {
+    const file = await fixture({access_token:jwt({exp:Date.now()/1000+3600}), account_id:'host'})
+    expect((await refreshChatgptAuthTokensForExternalAuth()).chatgptAccountId).toBe('host')
+    expect(await readFile(file.path, 'utf8')).toBe(file.raw)
+  })
+  it('asks for desktop sign-in on expiry without touching the host credentials', async () => {
+    const file = await fixture({access_token:jwt({exp:1}), refresh_token:'never-use', account_id:'host'})
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    await expect(refreshChatgptAuthTokensForExternalAuth()).rejects.toThrow('Windows Codex')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(await readFile(file.path, 'utf8')).toBe(file.raw)
+  })
+  it('rejects refresh into a different desktop account', async () => {
+    const file = await fixture({access_token:jwt({exp:Date.now()/1000+3600}), account_id:'new-host'})
+    await expect(refreshChatgptAuthTokensForExternalAuth({previousAccountId:'old-host'})).rejects.toThrow('主机 Codex 已切换账户')
+    expect(await readFile(file.path, 'utf8')).toBe(file.raw)
+  })
+  it('reads a new access token when the desktop has renewed it', async () => {
+    const file = await fixture({access_token:jwt({exp:1}), account_id:'host'})
+    await expect(refreshChatgptAuthTokensForExternalAuth()).rejects.toThrow()
+    const renewed = jwt({exp:Date.now()/1000+3600})
+    const newRaw = JSON.stringify({tokens:{access_token:renewed, account_id:'host'}})
+    await writeFile(file.path, newRaw)
+    expect((await refreshChatgptAuthTokensForExternalAuth()).accessToken).toBe(renewed)
+    expect(await readFile(file.path,'utf8')).toBe(newRaw)
   })
 })

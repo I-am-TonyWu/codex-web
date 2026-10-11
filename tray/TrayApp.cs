@@ -16,8 +16,8 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Codex 网页托盘")]
 [assembly: AssemblyDescription("本地 Codex 网页服务与桌面程序状态监控")]
-[assembly: AssemblyVersion("1.4.3.9")]
-[assembly: AssemblyFileVersion("1.4.3.9")]
+[assembly: AssemblyVersion(CodexWebTray.Program.Version)]
+[assembly: AssemblyFileVersion(CodexWebTray.Program.Version)]
 
 namespace CodexWebTray {
     internal static class Startup {
@@ -140,7 +140,7 @@ namespace CodexWebTray {
                         desktopRunning = monitor.Desktop, servicePid = runtime.ServicePid, url = Paths.Url,
                         pollSeconds = 3, autoStart = Startup.Enabled, trayVisible = tray.Visible,
                         dataRoot = Paths.Root,
-                        hasCloudflareTokenRegistry = Secrets.HasStoredToken, executable = Application.ExecutablePath, version = Assembly.GetExecutingAssembly().GetName().Version.ToString(), userSid = WindowsIdentity.GetCurrent().User.Value, hasCloudflareTokenFile = File.Exists(Path.Combine(Secrets.DirectoryPath, "cloudflare-token.dat")),
+                        hasCloudflareTokenRegistry = Secrets.HasStoredToken, executable = Application.ExecutablePath, version = Program.Version, userSid = WindowsIdentity.GetCurrent().User.Value, hasCloudflareTokenFile = File.Exists(Path.Combine(Secrets.DirectoryPath, "cloudflare-token.dat")),
                         startupCommand = Startup.SavedCommand,
                         updatedAt = DateTime.UtcNow.ToString("o"), uptimeSeconds = (int)(DateTime.UtcNow - started).TotalSeconds
                     });
@@ -237,7 +237,7 @@ namespace CodexWebTray {
             AddLabel(panel,"项目重构",352,510,150,24,9,false);
             panel.FormClosed += (s,e) => githubIcon.Image.Dispose();
             AddLabel(panel, "关闭窗口后仍在托盘运行", 30, 540, 370, 24, 9, false);
-            var version = AddLabel(panel, "v" + Assembly.GetExecutingAssembly().GetName().Version.ToString(), 430, 540, 100, 24, 9, false);
+            var version = AddLabel(panel, "v" + Program.Version, 430, 540, 100, 24, 9, false);
             version.TextAlign = ContentAlignment.TopRight;
             panel.FormClosed += (s,e) => { panel = null; };
             // The host uses 250% display scaling. Scale the geometry once while
@@ -323,6 +323,7 @@ namespace CodexWebTray {
     }
 
     internal static class Program {
+        internal const string Version = "1.4.4";
         internal static readonly string PipeName = "CodexWebTray-" + WindowsIdentity.GetCurrent().User.Value + "-" + Process.GetCurrentProcess().SessionId;
         internal static string Send(string command) {
             using (var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous)) {
@@ -350,7 +351,7 @@ namespace CodexWebTray {
                     try {
                         Directory.CreateDirectory(Paths.Root);
                         Startup.RepairStaleEntry();
-                        Paths.Log("Tray starting " + Assembly.GetExecutingAssembly().GetName().Version);
+                        Paths.Log("Tray starting " + Version);
                         using (var context = new TrayContext(Array.IndexOf(args, "--show") >= 0)) Application.Run(context);
                     } finally { mutex.ReleaseMutex(); }
                 }

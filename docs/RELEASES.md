@@ -2,8 +2,11 @@
 
 [GitHub 全部历史发行版 / All releases](https://github.com/I-am-TonyWu/codex-web/releases)
 
+此前的本地构建 [1.4.3.10](CHANGELOG-1.4.3.10.md)、[1.4.3.11](CHANGELOG-1.4.3.11.md)、[1.4.3.12](CHANGELOG-1.4.3.12.md) 已合入 1.4.4；没有单独发行附件。Local builds 1.4.3.10–1.4.3.12 are included in 1.4.4 and have no separate release assets.
+
 | 版本 / Version | 类型 / Channel | 内容 / Changes | 下载 / Download |
 |---|---|---|---|
+| 1.4.4 | 预览 / Pre-release | 自然语言工具摘要、折叠过程图片、固定任务状态、主机持有账户、Ctrl+Enter | [v1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4) |
 | 1.4.3.9 | 预览 / Pre-release | 桌面持有历史会话时通过本机协同通道发送、同步结果及审批 | [v1.4.3.9](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.9) |
 | 1.4.3.8 | 预览 / Pre-release | 修正占用状态缓存、原对话写入重查、手动发送重试 | [v1.4.3.8](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.8) |
 | 1.4.3.7 | 预览 / Pre-release | 网页终端控制、交接、旧请求拒绝、发送去重；桌面释放暂不可用 | [v1.4.3.7](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.7) |

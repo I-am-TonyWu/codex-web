@@ -28,7 +28,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { conversationStates, refreshControl, claimControl, releaseControl, heartbeatControl, checkPendingSend, clearPendingSend } from '../../api/conversationControl'
 const props = defineProps<{ threadId: string; retrying?: boolean }>()
-const emit = defineEmits<{ acquired: []; retry: [] }>()
+const emit = defineEmits<{ acquired: []; retry: []; statusKnown: [known: boolean] }>()
 const busy = ref(false)
 const notice = ref('')
 const state = computed(() => conversationStates[props.threadId])
@@ -46,7 +46,7 @@ async function run(action: () => Promise<unknown>) {
   busy.value = true; notice.value = ''
   try { await action() } catch (error) { notice.value = error instanceof Error ? error.message : '连接失败，请刷新状态。' } finally { busy.value = false }
 }
-async function refresh() { await run(() => refreshControl(props.threadId)) }
+async function refresh() { await run(async () => { try { await refreshControl(props.threadId); emit('statusKnown', true) } catch (error) { emit('statusKnown', false); throw error } }) }
 async function takeover(stop: boolean) {
   if (stop && !window.confirm('停止会保留已经完成的文件修改，不能撤销已执行操作。确认停止当前任务并接管？')) return
   await run(async () => { await claimControl(props.threadId, true, stop); notice.value = stop ? '任务已确认停止。草稿尚未发送。' : '已取得控制权。草稿尚未发送。'; emit('acquired') })
@@ -63,7 +63,8 @@ watch(() => props.threadId, (threadId, previous) => {
   generation++; notice.value = ''; clearInterval(timer)
   if (previous && conversationStates[previous]?.proof) void releaseControl(previous).catch(() => undefined)
   if (!threadId) return
-  void refreshControl(threadId).catch((error) => { if (props.threadId === threadId) notice.value = error.message })
+  emit('statusKnown', false)
+  void refreshControl(threadId).then(() => { if (props.threadId === threadId) emit('statusKnown', true) }).catch((error) => { if (props.threadId === threadId) { notice.value = error.message; emit('statusKnown', false) } })
   const current = generation
   timer = setInterval(async () => {
     if (polling || busy.value || document.hidden || current !== generation) return
@@ -71,8 +72,9 @@ watch(() => props.threadId, (threadId, previous) => {
     try {
       if (conversationStates[threadId]?.proof) await heartbeatControl(threadId)
       else await refreshControl(threadId)
+      if (current === generation) emit('statusKnown', true)
     } catch (error) {
-      try { await refreshControl(threadId) } catch { notice.value = error instanceof Error ? error.message : '正在重新连接，请刷新。' }
+      try { await refreshControl(threadId); if (current === generation) emit('statusKnown', true) } catch { if (current === generation) { notice.value = error instanceof Error ? error.message : '正在重新连接，请刷新。'; emit('statusKnown', false) } }
     } finally { polling = false }
   }, 5000)
 }, { immediate: true })

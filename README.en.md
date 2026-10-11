@@ -6,7 +6,9 @@ A browser interface for the Codex environment running on your Windows computer, 
 
 Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91**. The first public release is **1.4.3.1**. This is an independent community project, not affiliated with OpenAI, GitHub, or Cloudflare. It does not mirror the ChatGPT website or forward subscription-based ChatGPT chats.
 
-Current stable version: **1.4.3.6**. Latest preview: **[1.4.3.9](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.9)** ([desktop coordination for historical conversations](docs/releases/1.4.3.9.md)). See the [stable release notes](docs/releases/1.4.3.6.md), [version history and switching guide](docs/RELEASES.md), and [all GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases).
+Current stable version: **1.4.3.6**. Latest preview: **[1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4)** ([conversation display, task status and host connection](docs/releases/1.4.4.md)). See the [stable release notes](docs/releases/1.4.3.6.md), [version history and switching guide](docs/RELEASES.md), and [all GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases).
+
+1.4.4 includes the cumulative changes from local builds 1.4.3.10–1.4.3.12: natural-language tool summaries, collapsed commands and process images, and persistent task status. The browser only connects to the host's existing login; manage Codex accounts in the Windows client. Quota is at the top of settings, Ctrl+Enter submission is supported, and Telegram has been removed.
 
 ## Download and requirements
 
@@ -47,7 +49,8 @@ The tray menu contains status, Open web, Settings, and Exit. Start/stop/restart,
 - Create and read Codex work tasks, with desktop task synchronization support.
 - Synchronize modern local project IDs, names, ordering, empty projects, and explicit conversation assignments. Visible pages refresh about every five seconds and on foreground return; historical execution directories remain distinct from project roots. ChatGPT cloud-chat projects are outside the local work backend.
 - Filter reasoning-effort options using model capabilities.
-- Improvements to long conversation loading and scrolling.
+- Improvements to long conversation loading and scrolling. Consecutive tool operations use natural-language summaries; commands, output, process images and reasoning stay collapsed until opened. User images and final results remain visible.
+- Persistent task status outside the message scroll area distinguishes running, completed, stopped, failed, waiting for input and unconfirmed connection state.
 - Render Mermaid diagrams with light/dark themes, source toggling, and a full-size preview. Diagram assets are bundled locally, with no external CDN required.
 - File-upload progress, sending locked during uploads, and retryable failures.
 - Open or download generated host files through web links. Preview support depends on file type and browser.
@@ -120,7 +123,7 @@ Development/automation sandboxes may expose different file or registry views. Pa
 - **Token read error:** check Windows identity, permissions, and encrypted storage. An unreadable local token is different from an expired cloud token. API 401/403 requires checking Cloudflare token status and permissions.
 - **Port occupied:** close the old tray or duplicate web service. The launcher does not kill unrelated processes.
 - **Missing extensions or delayed sync:** check desktop installation, task working directory, and client version, then refresh. Future desktop versions may require compatibility updates.
-- **Ordinary ChatGPT chats:** not supported. PhantomStream, message forwarding, and the 1.4.4 browser experiment are excluded.
+- **Ordinary ChatGPT chats:** not supported. PhantomStream, message forwarding, and earlier browser experiments are excluded.
 
 ## Build from source
 
@@ -150,4 +153,4 @@ Layout: `web/` contains the Vue/TypeScript UI and server, `tray/` contains the C
 
 [MIT](LICENSE). Original copyright notices for Pavel Voronin and Igor Levochkin are retained. Windows tray/customizations are maintained in the I-am-TonyWu project. Node.js and dependency licenses are included in the runtime. The GitHub mark links to the upstream project and implies no endorsement. See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
 
-Preview: **[1.4.3.7](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.7)**. See [browser control and handoff notes](docs/releases/1.4.3.7.md). Stable downloads remain at `/releases/latest`.
+Preview: **[1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4)**. See [release notes](docs/releases/1.4.4.md). Stable downloads remain at `/releases/latest`.

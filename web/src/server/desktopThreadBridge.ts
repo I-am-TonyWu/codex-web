@@ -155,6 +155,11 @@ export class DesktopThreadBridge {
     this.idleTimer.unref?.()
   }
   has(threadId: string) { return this.attached.has(threadId) }
+  hasActiveWork() {
+    return [...this.attached.values()].some(a => !a.state || a.submission || !['idle', 'systemError'].includes(a.state.threadRuntimeStatus?.type)
+      || a.state.requests?.length || a.state.unconfirmedTurnSubmissions?.length || a.state.queuedMessages?.length
+      || a.state.threadGoal?.status === 'active' || desktopTurns(a.state).some(t => t.status === 'inProgress'))
+  }
   connected(threadId: string) { return !!this.attached.get(threadId)?.state }
   async attach(threadId: string): Promise<boolean> {
     if (!this.enabled) return false
@@ -327,5 +332,9 @@ export class DesktopThreadBridge {
       this.approvals.delete(key); this.emit({ method: 'server/request/resolved', params: { id: approval.id, threadId, method: approval.method } })
     }
   }
-  close() { clearInterval(this.idleTimer); for (const id of this.attached.keys()) this.detach(id); this.ipc.close() }
+  reset() {
+    for (const id of [...this.attached.keys()]) { this.detach(id); this.emit({ method: 'web/thread/desktopDisconnected', params: { threadId: id } }) }
+    this.ipc.close()
+  }
+  close() { clearInterval(this.idleTimer); this.reset() }
 }

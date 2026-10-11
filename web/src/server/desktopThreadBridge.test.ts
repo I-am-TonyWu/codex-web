@@ -32,6 +32,27 @@ function setup() {
 afterEach(() => { for (const b of open.splice(0)) b.close(); vi.useRealTimers() })
 
 describe('desktop coordination preserves the original writer', () => {
+  it('keeps idle cleanup working after a reset and reconnect', async () => {
+    vi.useFakeTimers()
+    const { bridge, ipc, emit } = setup()
+    await bridge.attach(threadId); expect(bridge.hasActiveWork()).toBe(false)
+    bridge.reset(); expect(bridge.has(threadId)).toBe(false); expect(ipc.close).toHaveBeenCalledTimes(1)
+    await bridge.attach(threadId); expect(bridge.connected(threadId)).toBe(true)
+    await vi.advanceTimersByTimeAsync(65_001)
+    expect(bridge.has(threadId)).toBe(false)
+    expect(emit.mock.calls.some(c => c[0].method === 'web/thread/desktopDetached')).toBe(true)
+  })
+  it.each(['active', 'approval', 'submission', 'unconfirmed', 'queued', 'goal'])('blocks account changes during desktop %s', async kind => {
+    const { bridge, ipc } = setup()
+    if (kind === 'active') ipc.state.threadRuntimeStatus = { type: 'active' }
+    if (kind === 'approval') ipc.state.requests = [{ id: 2, method: 'item/commandExecution/requestApproval', params: {} }]
+    if (kind === 'unconfirmed') ipc.state.unconfirmedTurnSubmissions = [{ requestId: 'pending' }]
+    if (kind === 'queued') ipc.state.queuedMessages = [{ id: 'queue' }]
+    if (kind === 'goal') ipc.state.threadGoal = { status: 'active' }
+    await bridge.attach(threadId)
+    if (kind === 'submission') await bridge.rpc(threadId, 'turn/start', { input: [] })
+    expect(bridge.hasActiveWork()).toBe(true)
+  })
   it('discovers and reads the actual owner without sending a turn', async () => {
     const { bridge, ipc } = setup()
     expect(await bridge.attach(threadId)).toBe(true)

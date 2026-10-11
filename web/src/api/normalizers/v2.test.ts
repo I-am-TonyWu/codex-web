@@ -45,6 +45,15 @@ function threadReadResponseWithContent(content: ThreadReadResponse['thread']['tu
 }
 
 describe('normalizeThreadMessagesV2', () => {
+  it.each(['completed', 'interrupted', 'failed'] as const)('preserves task status %s independently of command status', status => {
+    const response = threadReadResponseWithContent([{ id: 'final', type: 'agentMessage', text: '答复', phase: 'final_answer', memoryCitation: null }])
+    response.thread.turns[0].status = status
+    expect(normalizeThreadMessagesV2(response)[0].turnStatus).toBe(status)
+  })
+  it('keeps generated image deliverables distinct from process image views', () => {
+    const response = threadReadResponseWithContent([{ id: 'generated', type: 'imageView', path: 'C:/output.png', imagePurpose: 'generated' } as never])
+    expect(normalizeThreadMessagesV2(response)[0].messageType).toBe('imageGeneration')
+  })
   it('preserves selected skill inputs on the rendered user message', () => {
     const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([{
       type: 'userMessage',

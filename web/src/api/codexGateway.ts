@@ -3,6 +3,7 @@ import type { ReasoningEffort as UiReasoningEffort } from '../types/codex'
 import { normalizeProjectMetadata, type DesktopProjectMetadata, type LocalProjectMutation } from '../workspaceProjects.js'
 import { modelCapabilities } from './modelCapabilities'
 import { readServiceJson } from './serviceJson'
+import { FILE_UPLOAD_MAX_BYTES, FILE_UPLOAD_TIMEOUT_MS } from '../shared/fileUpload'
 import type { ZenModelMetadata } from '../types/zenModels'
 import {
   fetchRpcMethodCatalog,
@@ -1697,9 +1698,10 @@ export type ForkedThread = {
   messages: UiMessage[]
 }
 
-export async function startThread(cwd?: string, model?: string): Promise<StartedThread> {
+export async function startThread(cwd?: string, model?: string, projectId?: string | null): Promise<StartedThread> {
   try {
     const params: Record<string, unknown> = { ephemeral: false, historyMode: 'paginated', threadSource: 'user' }
+    if (projectId !== undefined) params.projectId = projectId
     if (typeof cwd === 'string' && cwd.trim().length > 0) {
       params.cwd = cwd.trim()
     }
@@ -1732,6 +1734,8 @@ export async function forkThread(
     try {
       const payload = await callRpc<ThreadForkResponse & ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', {
         threadId,
+        ephemeral: false,
+        threadSource: 'user',
         persistExtendedHistory: true,
       })
       const forkedThreadId = normalizeThreadIdFromPayload(payload)
@@ -1756,6 +1760,8 @@ export async function forkThread(
     }
     const params: Record<string, unknown> = {
       threadId: normalizedThreadId,
+      ephemeral: false,
+      threadSource: 'user',
     }
     if (typeof cwd === 'string' && cwd.trim().length > 0) {
       params.cwd = cwd.trim()
@@ -3055,13 +3061,15 @@ export async function mutateLocalProject(mutation: LocalProjectMutation): Promis
   invalidateWorkspaceRootsStateCache()
 }
 
-export async function setThreadProject(threadId: string, projectId: string | null): Promise<void> {
+export async function setThreadProject(threadId: string, projectId: string | null): Promise<string> {
   const response = await fetch('/codex-api/thread-project', { method: 'POST', headers: { 'Content-Type': 'application/json', ...await mutationHeaders(threadId) }, body: JSON.stringify({ threadId, projectId }) })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to assign thread project; refresh and retry'))
   }
   invalidateWorkspaceRootsStateCache()
+  const payload = await response.json() as { warning?: string }
+  return payload.warning ?? ''
 }
 
 export async function openProjectRoot(path: string, options?: { createIfMissing?: boolean; label?: string }): Promise<string> {
@@ -3606,17 +3614,21 @@ export async function removeComposerPrompt(path: string): Promise<boolean> {
   }
 }
 
-const FILE_UPLOAD_TIMEOUT_MS = 15 * 60_000
 export async function uploadFile(file: File, onProgress?: (loaded: number, total: number) => void): Promise<string | null> {
-  return new Promise(resolve => {
+  if (file.size > FILE_UPLOAD_MAX_BYTES) throw new Error('单个文件最大支持 90 MiB，请压缩或拆分后上传。')
+  return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/codex-api/upload-file')
     xhr.timeout = FILE_UPLOAD_TIMEOUT_MS
     xhr.upload.onprogress = event => onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size)
-    xhr.onerror = xhr.onabort = xhr.ontimeout = () => resolve(null)
+    xhr.onerror = () => reject(new Error('上传连接中断，请检查网络后重新选择文件。'))
+    xhr.onabort = () => reject(new Error('上传已取消。'))
+    xhr.ontimeout = () => reject(new Error('上传超时，请检查网络或缩小文件后重试。'))
     xhr.onload = () => {
-      try { resolve(xhr.status >= 200 && xhr.status < 300 ? JSON.parse(xhr.responseText).path ?? null : null) }
-      catch { resolve(null) }
+      let payload: { path?: string; error?: string } = {}
+      try { payload = JSON.parse(xhr.responseText) } catch { /* A proxy can return HTML. */ }
+      if (xhr.status >= 200 && xhr.status < 300 && payload.path) resolve(payload.path)
+      else reject(new Error(payload.error || (xhr.status === 413 ? '单个文件最大支持 90 MiB，请压缩或拆分后上传。' : `上传失败（HTTP ${xhr.status}），请重新选择文件；若登录已过期，请先刷新网页。`)))
     }
     const form = new FormData()
     form.append('file', file)

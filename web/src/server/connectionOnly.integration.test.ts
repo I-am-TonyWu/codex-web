@@ -5,15 +5,15 @@ import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../commandResolution.js', () => ({ resolveCodexCommand: () => process.execPath, resolveRipgrepCommand: () => null }))
-vi.mock('../utils/commandInvocation.js', () => ({ getSpawnInvocation: (_command: string, args: string[]) => ({command:process.execPath,args:[process.env.CONNECTION_TEST_CLI!,...args]}) }))
+vi.mock('../utils/commandInvocation.js', () => ({ getSpawnInvocation: (_command: string, args: string[]) => ({command:process.env.CONNECTION_TEST_SPAWN_ERROR || process.execPath,args:[process.env.CONNECTION_TEST_CLI!,...args]}) }))
 import { createCodexBridgeMiddleware } from './codexAppServerBridge'
 
 const realFetch = globalThis.fetch
 const originalHome = process.env.CODEX_HOME
 let home = '', url = '', server: Server, middleware: ReturnType<typeof createCodexBridgeMiddleware>
 let originalAuth = '', originalConfig = ''
-async function request(route: string, body?: unknown) {
-  const response = await realFetch(url + route, {method:body === undefined ? 'GET' : 'POST', headers:{'Content-Type':'application/json', Origin:url}, ...(body===undefined ? {} : {body:JSON.stringify(body)})})
+async function request(route: string, body?: unknown, headers: Record<string, string> = {}) {
+  const response = await realFetch(url + route, {method:body === undefined ? 'GET' : 'POST', headers:{'Content-Type':'application/json', Origin:url,...headers}, ...(body===undefined ? {} : {body:JSON.stringify(body)})})
   return {status:response.status, body:await response.json() as any}
 }
 const fakeCli = String.raw`
@@ -26,9 +26,15 @@ rl.createInterface({input:process.stdin}).on('line',line=>{
  record({method:msg.method,refreshToken:msg.params?.refreshToken,loginType:msg.params?.type});
  let result={};
  if(msg.method==='account/login/start') result={type:msg.params.type};
+ if(msg.method==='account/read' && fs.existsSync(path.join(home,'hang-account'))) return;
  if(msg.method==='account/read') result={account:{type:'chatgpt',planType:'plus'}};
  if(msg.method==='thread/loaded/list') result={data:fs.existsSync(path.join(home,'busy'))?['busy-thread']:[]};
- if(msg.method==='thread/read') result={thread:{id:'busy-thread',status:{type:'active'}}};
+ if(msg.method==='project/list') result={data:[{id:'native-project',metadata:{'codex.localProjectId':'local-project'}}],nextCursor:null};
+ if(msg.method==='thread/metadata/update') {
+   if(fs.existsSync(path.join(home,'fail-project'))) {process.stdout.write(JSON.stringify({id:msg.id,error:{code:-1,message:'fixture save failed'}})+'\n');return;}
+   fs.writeFileSync(path.join(home,'membership.json'),JSON.stringify(msg.params.projectId||null));
+ }
+ if(msg.method==='thread/read') result={thread:{id:msg.params.threadId,status:{type:msg.params.threadId==='busy-thread'?'active':'idle'},projectId:fs.existsSync(path.join(home,'membership.json'))?JSON.parse(fs.readFileSync(path.join(home,'membership.json'),'utf8')):null}};
  if(msg.method==='model/list') result={data:[{id:'host-model',model:'host-model'}]};
  if(msg.method==='account/rateLimits/read') result={rateLimits:{primary:{usedPercent:10,windowDurationMins:300,resetsAt:123},secondary:null,credits:null,planType:'plus'}};
  process.stdout.write(JSON.stringify({id:msg.id,result})+'\n');
@@ -52,13 +58,65 @@ beforeEach(async () => {
 afterEach(async () => {
   middleware?.dispose(); server?.closeAllConnections()
   await new Promise<void>(resolve=>server?.close(()=>resolve()))
-  delete (globalThis as any).__codexRemoteSharedBridge__; delete process.env.CONNECTION_TEST_CLI
+  delete (globalThis as any).__codexRemoteSharedBridge__; delete process.env.CONNECTION_TEST_CLI; delete process.env.CONNECTION_TEST_SPAWN_ERROR
   if(originalHome===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=originalHome
   vi.unstubAllGlobals()
   await rm(home,{recursive:true,force:true,maxRetries:10,retryDelay:100})
 })
 
 describe('connection-only remote service', () => {
+  it('persists native membership without racing the desktop cache and reports unconfirmed desktop display', async () => {
+    const path=join(home,'.codex-global-state.json')
+    await writeFile(path,JSON.stringify({'local-projects':{'local-project':{name:'项目',rootPaths:[home]}},'projectless-thread-ids':['fixture-chat']}))
+    const registered=(await request('/codex-api/control/register',{label:'fixture'})).body.data
+    const identity={'x-codex-client':registered.id,'x-codex-client-key':registered.key}
+    const state=(await request('/codex-api/control/state?threadId=fixture-chat',undefined,identity)).body.data
+    const owned=(await request('/codex-api/control/claim',{threadId:'fixture-chat',epoch:state.epoch,version:state.version},identity)).body.data
+    const headers={...identity,'x-codex-control':JSON.stringify(owned.proof)}
+    const originalState=await readFile(path,'utf8')
+    const moved=await request('/codex-api/thread-project',{threadId:'fixture-chat',projectId:'local-project'},headers)
+    expect(moved.status).toBe(200); expect(moved.body.warning).toContain('尚不能确认')
+    expect(await readFile(path,'utf8')).toBe(originalState)
+    expect(JSON.parse(await readFile(join(home,'membership.json'),'utf8'))).toBe('native-project')
+    expect((await request('/codex-api/workspace-roots-state')).body.data.localProjects[0].serverProjectId).toBe('native-project')
+    const saved=await readFile(path,'utf8')
+    await writeFile(join(home,'fail-project'),'fixture')
+    expect((await request('/codex-api/thread-project',{threadId:'fixture-chat',projectId:null},headers)).status).toBe(409)
+    expect(await readFile(path,'utf8')).toBe(saved)
+    expect(JSON.parse(await readFile(join(home,'membership.json'),'utf8'))).toBe('native-project')
+    await rm(join(home,'fail-project'))
+    expect((await request('/codex-api/thread-project',{threadId:'fixture-chat',projectId:null},headers)).status).toBe(200)
+    expect(JSON.parse(await readFile(join(home,'membership.json'),'utf8'))).toBeNull()
+    expect(JSON.parse(await readFile(path,'utf8'))['projectless-thread-ids']).toContain('fixture-chat')
+  })
+  it('reports HTTP health without starting an executor or requiring a signed-in account', async () => {
+    expect(await request('/codex-api/health')).toEqual({ status: 200, body: { ok: true } })
+    await expect(readFile(join(home, 'rpc-audit.jsonl'), 'utf8')).rejects.toThrow()
+  })
+  it('ends a missing RPC reply without restarting the executor or resending the request', async () => {
+    await request('/codex-api/rpc', { method: 'model/list', params: {} })
+    await writeFile(join(home, 'hang-account'), 'fixture')
+    const originalTimeout = globalThis.setTimeout
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    timer.mockImplementation(((callback: (...args: any[]) => void, ms?: number, ...args: any[]) => originalTimeout(callback, ms === 120000 ? 40 : ms, ...args)) as typeof setTimeout)
+    try {
+      const result = await request('/codex-api/rpc', { method: 'account/read', params: {} })
+      expect(result.status).toBe(200)
+      expect(result.body.error.message).toContain('timed out')
+      await rm(join(home, 'hang-account'))
+      expect((await request('/codex-api/rpc', { method: 'model/list', params: {} })).body.result.data).toHaveLength(1)
+      const audit = (await readFile(join(home, 'rpc-audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+      expect(audit.filter(row => row.method === 'account/read')).toHaveLength(1)
+      expect(audit.filter(row => row.args)).toHaveLength(1)
+    } finally { timer.mockRestore() }
+  })
+  it('handles a child spawn error as an RPC error rather than an unhandled process event', async () => {
+    process.env.CONNECTION_TEST_SPAWN_ERROR = join(home, 'missing-codex.exe')
+    const result = await request('/codex-api/rpc', { method: 'model/list', params: {} })
+    expect(result.status).toBe(200)
+    expect(result.body.error.message).toMatch(/ENOENT|not found/iu)
+  })
+
   it('rejects removed account and Telegram endpoints without spawning Codex', async () => {
     for(const route of ['/accounts','/accounts/refresh','/accounts/login/start','/accounts/switch','/accounts/remove','/telegram/configure-bot']) {
       expect((await request('/codex-api'+route,{})).status).toBe(410)

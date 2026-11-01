@@ -29,6 +29,10 @@
 
           <div v-if="isLoadingReadme" class="sdm-readme-loading">{{ t('Loading skill contents...') }}</div>
           <div v-else-if="readmeContent" class="sdm-readme" v-html="renderedReadme"></div>
+          <details v-if="originalContent" class="sdm-readme">
+            <summary>查看原文 / Original SKILL.md</summary>
+            <pre class="sdm-original">{{ originalContent }}</pre>
+          </details>
 
           <a v-if="skill.url" class="sdm-link" :href="skill.url" target="_blank" rel="noopener noreferrer">{{ t('View on GitHub') }}</a>
         </div>
@@ -129,6 +133,7 @@ const emit = defineEmits<{
 
 const localDescription = ref('')
 const readmeContent = ref('')
+const originalContent = ref('')
 const isLoadingReadme = ref(false)
 let readmeTimer: ReturnType<typeof setTimeout> | undefined
 let readmeRevision = 0
@@ -168,6 +173,7 @@ function simpleMarkdown(md: string): string {
 }
 
 async function fetchReadme(): Promise<void> {
+  if (document.hidden) { readmeTimer = setTimeout(() => void fetchReadme(), 3000); return }
   if (!props.skill.owner || !props.skill.name) return
   const revision = ++readmeRevision
   isLoadingReadme.value = true
@@ -179,9 +185,10 @@ async function fetchReadme(): Promise<void> {
     if (props.skill.path) params.set('path', props.skill.path)
     const resp = await fetch(`/codex-api/skills-hub/readme?${params}`)
     if (!resp.ok) return
-    const data = (await resp.json()) as { content?: string; description?: string; translationStatus?: string }
+    const data = (await resp.json()) as { content?: string; description?: string; originalContent?: string; translationStatus?: string }
     if (!props.visible || revision !== readmeRevision) return
     readmeContent.value = data.content ?? ''
+    originalContent.value = data.originalContent ?? ''
     localDescription.value = data.description ?? ''
     if (data.translationStatus === 'pending') readmeTimer = setTimeout(() => void fetchReadme(), 3000)
   } catch {
@@ -197,6 +204,7 @@ watch(() => [props.visible, props.skill.path] as const, ([v]) => {
   if (v) {
     localDescription.value = ''
     readmeContent.value = ''
+    originalContent.value = ''
     void fetchReadme()
   }
 })
@@ -228,6 +236,7 @@ function onBrowseFiles(): void {
 </script>
 
 <style scoped>
+.sdm-original { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @reference "tailwindcss";
 
 .sdm-overlay {

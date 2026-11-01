@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
@@ -119,12 +119,20 @@ export function prependPathEntry(existingPath: string, entry: string): string {
 
 export function resolveCodexCommand(): string | null {
   const explicit = process.env.CODEXUI_CODEX_COMMAND?.trim()
+  const desktopRoot = process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? join(process.env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin') : ''
+  let desktopCandidates: string[] = []
+  try {
+    if (desktopRoot) desktopCandidates = readdirSync(desktopRoot)
+      .map(dir => join(desktopRoot, dir, 'codex.exe')).filter(existsSync)
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  } catch { /* The desktop may be replacing its CLI during an update. */ }
   const packageCandidates = getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
   const fallbackCandidates = process.platform === 'win32'
     ? [...packageCandidates, 'codex']
     : ['codex', ...packageCandidates]
 
-  for (const candidate of uniqueStrings([explicit, ...fallbackCandidates])) {
+  for (const candidate of uniqueStrings([explicit, ...desktopCandidates, ...fallbackCandidates])) {
     if (isRunnableCommand(candidate, ['--version'])) {
       return candidate
     }

@@ -1,6 +1,7 @@
 import { createHash, randomUUID, randomBytes } from 'node:crypto'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { readStateSnapshot, replaceFileSnapshot } from './jsonState.js'
 
 export class ControlError extends Error {
   constructor(public readonly code: string, message: string) { super(message) }
@@ -15,36 +16,64 @@ const reject = (message = '此对话的控制权已改变。请查看最新状�
 export class ConversationControl {
   readonly epoch = randomUUID()
   private readonly clients = new Map<string, ControlClient>()
+  private readonly clientSeen = new Map<string, number>()
+  private readonly entrySeen = new Map<string, number>()
   private readonly entries = new Map<string, Entry>()
   private readonly tails = new Map<string, Promise<unknown>>()
   private readonly receipts = new Map<string, Receipt>()
   private ready: Promise<void> | null = null
   private logTail: Promise<void> = Promise.resolve()
+  private logRecords = 0
   constructor(private readonly ledgerPath: string, private readonly now = Date.now, private readonly leaseMs = 30_000) {}
 
   register(scope: string, label: string): ControlClient {
+    this.pruneIdle()
     if (this.clients.size >= 512) throw new ControlError('control_capacity', '终端过多，请重启网页服务后重连。')
     const client = { id: randomUUID(), key: randomBytes(32).toString('hex'), scope, label: label.slice(0, 40) || '网页终端' }
     this.clients.set(client.id, client)
+    this.clientSeen.set(client.id, this.now())
     return client
   }
   authenticate(id: string, key: string, scope: string): ControlClient {
     const client = this.clients.get(id)
     if (!client || client.key !== key || client.scope !== scope) throw new ControlError('control_client_expired', '网页服务已重启或登录身份已改变，请刷新页面重新连接。')
+    this.clientSeen.set(id, this.now())
     return client
   }
   private entry(threadId: string): Entry {
     if (!threadId || threadId.length > 200) throw new ControlError('control_invalid', '无效的对话 ID。')
     let entry = this.entries.get(threadId)
     if (!entry) {
+      this.pruneIdle()
       if (this.entries.size >= 4096) throw new ControlError('control_capacity', '会话控制容量已满，请重启网页服务。')
       entry = { version: 0, revision: 0, owner: null, token: '', heartbeat: 0, activity: 'unknown', turnId: null, transferring: false, completedTurnId: null, executionSource: 'web' }
       this.entries.set(threadId, entry)
     }
+    this.entrySeen.set(threadId, this.now())
     if (entry.owner && !entry.transferring && this.now() - entry.heartbeat >= this.leaseMs) {
       entry.owner = null; entry.token = ''; entry.version++
     }
     return entry
+  }
+  private pruneIdle() {
+    const now = this.now()
+    const protectedThreads = new Set([...this.receipts.values()].filter(r => r.state === 'pending').map(r => r.threadId))
+    for (const [id, e] of this.entries) {
+      if (e.transferring || this.tails.has(id) || protectedThreads.has(id) || ['running', 'approval'].includes(e.activity)) continue
+      if (now - (this.entrySeen.get(id) ?? now) < 86400000) continue
+      this.entries.delete(id); this.entrySeen.delete(id)
+    }
+    const owners = new Set([...this.entries.values()].filter(e => e.transferring || ['running', 'approval'].includes(e.activity) || now - e.heartbeat < this.leaseMs).map(e => e.owner?.id))
+    for (const id of this.clients.keys()) {
+      if (!owners.has(id) && now - (this.clientSeen.get(id) ?? now) >= 86400000) { this.clients.delete(id); this.clientSeen.delete(id) }
+    }
+  }
+  private pruneReceipts() {
+    const terminal = [...this.receipts.values()].filter(r => r.state !== 'pending').sort((a, b) => b.at - a.at)
+    for (let i = 0; i < terminal.length; i++) {
+      const r = terminal[i]!
+      if (i >= 10000 || r.at <= this.now() - 30 * 86400000) this.receipts.delete(r.id)
+    }
   }
   status(threadId: string, client: ControlClient) {
     const e = this.entry(threadId)
@@ -109,13 +138,24 @@ export class ConversationControl {
   private loadReceipts() {
     return this.ready ??= readFile(this.ledgerPath, 'utf8').then((text) => {
       for (const line of text.split('\n')) {
-        try { const receipt = JSON.parse(line) as Receipt; if (receipt.id && receipt.at > this.now() - 30 * 86400000) this.receipts.set(receipt.id, receipt) } catch { /* incomplete last record stays uncertain */ }
+        try { const receipt = JSON.parse(line) as Receipt; if (receipt.id) { this.receipts.set(receipt.id, receipt); this.logRecords++ } } catch { /* incomplete last record stays uncertain */ }
       }
+      this.pruneReceipts()
     }).catch((error) => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error })
   }
   private async persist(receipt: Receipt) {
     this.receipts.set(receipt.id, receipt)
-    const next = this.logTail.then(async () => { await mkdir(dirname(this.ledgerPath), { recursive: true }); await appendFile(this.ledgerPath, JSON.stringify(receipt) + '\n', { encoding: 'utf8', mode: 0o600, flush: true }) })
+    const next = this.logTail.then(async () => {
+      await mkdir(dirname(this.ledgerPath), { recursive: true })
+      await appendFile(this.ledgerPath, JSON.stringify(receipt) + '\n', { encoding: 'utf8', mode: 0o600, flush: true })
+      this.logRecords++
+      this.pruneReceipts()
+      if (this.logRecords > Math.max(1000, this.receipts.size * 2)) {
+        const snapshot = await readStateSnapshot(this.ledgerPath)
+        await replaceFileSnapshot(this.ledgerPath, snapshot, [...this.receipts.values()].map(r => JSON.stringify(r)).join('\n') + '\n')
+        this.logRecords = this.receipts.size
+      }
+    })
     this.logTail = next.catch(() => undefined)
     await next
   }
@@ -133,6 +173,7 @@ export class ConversationControl {
       if (!/^[a-zA-Z0-9-]{16,100}$/.test(id)) throw new ControlError('control_invalid', '发送请求缺少唯一编号。')
       this.verify(threadId, client, proof)
       await this.loadReceipts()
+      this.pruneReceipts()
       const hash = createHash('sha256').update(JSON.stringify(params)).digest('hex')
       const old = this.receipts.get(id)
       if (old) {
@@ -140,7 +181,7 @@ export class ConversationControl {
         if (old.state === 'completed') return old.result
         throw new ControlError('delivery_uncertain', '此消息已有发送记录。请先核对最新历史，确认是否已执行；不会自动重复发送。')
       }
-      if (this.receipts.size >= 10000) throw new ControlError('control_capacity', '发送记录已满，请先备份并维护 webui-send-receipts.jsonl。')
+      if ([...this.receipts.values()].filter(r => r.state === 'pending').length >= 10000) throw new ControlError('control_capacity', '未确认的发送记录过多，请先核对发送结果。')
       const receipt: Receipt = { id, scope: client.scope, threadId, hash, state: 'pending', at: this.now() }
       await this.persist(receipt)
       let result: unknown

@@ -2,13 +2,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getSkillPresentation, needsChineseTranslation, splitSkillTextForTranslation, waitForSkillTranslations } from './skillPresentation'
+import { disposeSkillTranslations, getSkillPresentation, needsChineseTranslation, splitSkillTextForTranslation, waitForSkillTranslations } from './skillPresentation'
 
 let home: string
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), 'codex-skill-chinese-')); vi.stubEnv('CODEX_HOME', home) })
 afterEach(async () => { await waitForSkillTranslations(); vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }) })
 
 describe('Chinese skill presentation', () => {
+  it('bounds long single-line prose and descriptions without dropping text or placeholders', () => {
+    const content = 'A'.repeat(5990) + '⟪CODEX_LITERAL_0⟫' + 'B'.repeat(10000)
+    const source = { description: 'D'.repeat(10000), content }
+    const chunks = splitSkillTextForTranslation(source)
+    expect(chunks.every(chunk => chunk.description.length + chunk.content.length <= 6000)).toBe(true)
+    expect(chunks.map(chunk => chunk.description).join('')).toBe(source.description)
+    expect(chunks.map(chunk => chunk.content).join('')).toBe(source.content)
+    expect(chunks.some(chunk => chunk.content.includes('⟪CODEX_LITERAL_0⟫'))).toBe(true)
+  })
+  it('aborts active work and skips queued jobs when the service closes', async () => {
+    const translate = vi.fn((_source, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })))
+    await getSkillPresentation({ description: 'Translate this running work now.', content: '' }, translate)
+    await getSkillPresentation({ description: 'Translate this queued work next.', content: '' }, translate)
+    disposeSkillTranslations()
+    await waitForSkillTranslations()
+    expect(translate).toHaveBeenCalledTimes(1)
+  })
   it('splits long explanations without omitting text or dividing fenced code', () => {
     const code = '```sh\nreport --check\n\nreport --summary\n```'
     const source = { description: 'Inspect reports.', content: 'A complete explanation.\n'.repeat(600) + code + '\nThe final sentence.' }

@@ -1,9 +1,21 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildAppServerArgs, buildWebTurnPermissionOverrides } from './appServerRuntimeConfig'
 
 afterEach(() => vi.unstubAllEnvs())
 
 describe('app-server runtime config', () => {
+  it('keeps the actual tray command aligned with the CLI and web-turn permission policy', () => {
+    const runtime = readFileSync(new URL('../../../tray/Runtime.cs', import.meta.url), 'utf8')
+    const cli = readFileSync(new URL('../cli/index.ts', import.meta.url), 'utf8')
+    const sandbox = runtime.match(/--sandbox-mode ([a-z-]+)/u)![1]!
+    const approval = runtime.match(/--approval-policy ([a-z-]+)/u)![1]!
+    expect(cli).toContain('process.env.CODEXUI_SANDBOX_MODE = options.sandboxMode')
+    expect(cli).toContain('process.env.CODEXUI_APPROVAL_POLICY = options.approvalPolicy')
+    vi.stubEnv('CODEXUI_SANDBOX_MODE', sandbox); vi.stubEnv('CODEXUI_APPROVAL_POLICY', approval)
+    expect(buildAppServerArgs()).toContain('sandbox_mode="danger-full-access"')
+    expect(buildWebTurnPermissionOverrides().approvalPolicy).toBe('never')
+  })
   it('uses the same full-access/no-approval defaults for new and resumed web turns', () => {
     expect(buildAppServerArgs()).toContain('approval_policy="never"')
     expect(buildAppServerArgs()).toContain('sandbox_mode="danger-full-access"')

@@ -1,5 +1,9 @@
 <template>
-  <aside v-if="snapshots.length > 0" class="rate-limit-status" aria-live="polite">
+  <component :is="compact ? 'span' : 'aside'" v-if="compact || snapshots.length > 0" class="rate-limit-status" :class="{ 'is-compact': compact }" aria-live="polite">
+    <template v-if="compact">
+      <span v-for="metric in compactMetrics" :key="metric.key" :title="metric.label">{{ metric.shortLabel }}</span>
+    </template>
+    <template v-else>
     <div
       v-for="snapshot in snapshots"
       :key="getSnapshotKey(snapshot)"
@@ -25,20 +29,33 @@
         {{ getFooterParts(snapshot).join(' | ') }}
       </div>
     </div>
-  </aside>
+    </template>
+  </component>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { UiRateLimitSnapshot, UiRateLimitWindow } from '../../types/codex'
 
-defineProps<{
+const props = defineProps<{
   snapshots: UiRateLimitSnapshot[]
+  compact?: boolean
 }>()
 
 type RateLimitMetric = {
   key: string
   label: string
+  shortLabel: string
 }
+
+const compactMetrics = computed(() => {
+  const snapshot = props.snapshots.find(item => item.limitId === 'codex') ?? props.snapshots[0]
+  const metrics = snapshot ? getWindowMetrics(snapshot) : []
+  return metrics.length ? metrics : [
+    { key: 'primary', label: '额度暂不可用', shortLabel: '5h —' },
+    { key: 'secondary', label: '额度暂不可用', shortLabel: '7d —' },
+  ]
+})
 
 function getSnapshotKey(snapshot: UiRateLimitSnapshot): string {
   return snapshot.limitId?.trim() || snapshot.limitName?.trim() || '__default__'
@@ -77,6 +94,7 @@ function formatWindowMetric(window: UiRateLimitWindow, key: string): RateLimitMe
   return {
     key,
     label: `${formatWindowDuration(window.windowDurationMins)} ${formatRemainingPercent(window.usedPercent)}`,
+    shortLabel: `${formatWindowDuration(window.windowDurationMins)} ${Math.round(Math.max(0, Math.min(100, 100 - window.usedPercent)))}%`,
   }
 }
 
@@ -189,6 +207,9 @@ function buildTooltip(snapshot: UiRateLimitSnapshot): string {
 .rate-limit-status {
   @apply flex w-full flex-col items-end gap-2;
 }
+
+.rate-limit-status.is-compact { @apply inline-flex w-auto flex-row items-center gap-2 text-xs tabular-nums text-zinc-500; }
+:global(:root.dark) .rate-limit-status.is-compact { @apply text-zinc-400; }
 
 .rate-limit-card {
   @apply w-full rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-right shadow-sm backdrop-blur;

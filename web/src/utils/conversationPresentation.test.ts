@@ -43,6 +43,9 @@ describe('conversation presentation', () => {
     expect(taskPresentation({ ...input, running: false, error: 'failure' }).kind).toBe('failed')
     expect(taskPresentation({ ...input, sending: true }).label).toBe('正在提交')
   })
+  it('uses live desktop activity instead of a stale interrupted disk turn', () => {
+    expect(taskPresentation({ messages: [{ ...narration, turnStatus: 'interrupted' }], running: false, pending: false, activity: 'running' }).kind).toBe('running')
+  })
   it('does not hide user attachments or image generation deliverables', () => {
     expect(groupProcessMessages([{ ...image, role: 'user', messageType: 'userMessage' }, { ...image, messageType: 'imageGeneration' }]).size).toBe(0)
   })

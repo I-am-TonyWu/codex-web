@@ -37,9 +37,9 @@ namespace CodexWebTray {
                 } else {
                     State = Lamp.Error; Detail = "Codex 已运行，网页服务未就绪，正在检查";
                     if (++Failures >= 5) {
-                        runtime.Stop(); Failures = 0;
+                        Failures = 5;
                         RetryAt = now.AddSeconds(30);
-                        Detail = "网页服务连续未响应，30 秒后自动重试";
+                        Detail = "网页服务未响应，保留运行进程以免中断任务；可手动重启";
                     }
                 }
             } catch (Exception ex) {

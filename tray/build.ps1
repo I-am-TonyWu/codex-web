@@ -5,9 +5,9 @@ $outputRoot = Join-Path (Split-Path $sourceRoot -Parent) 'artifacts'
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $references = @('/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll','/r:System.IO.Compression.dll','/r:System.IO.Compression.FileSystem.dll','/r:System.Security.dll')
-$sources = @('Monitor.cs','Runtime.cs','TrayApp.cs','SecuritySettings.cs','CloudflareSite.cs') | ForEach-Object { Join-Path $sourceRoot $_ }
+$sources = @('Monitor.cs','Runtime.cs','TrayApp.cs','SecuritySettings.cs','CloudflareSite.cs','OpenCodeService.cs') | ForEach-Object { Join-Path $sourceRoot $_ }
 if ($Test) {
-    foreach ($name in @('MonitorTests','SecurityTests')) {
+    foreach ($name in @('MonitorTests','SecurityTests','DualServiceTests')) {
         & $compiler /nologo /target:exe /platform:x64 "/main:CodexWebTray.$name" "/out:$outputRoot\$name.exe" @references @sources "$sourceRoot\$name.cs"
         if ($LASTEXITCODE -ne 0) { throw "$name compilation failed" }
         & "$outputRoot\$name.exe"
@@ -25,6 +25,19 @@ if (-not (Test-Path $archive)) {
 }
 $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText("$outputRoot\payload.id",$hash.Substring(0,16))
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$trayVersion = [regex]::Match([IO.File]::ReadAllText("$sourceRoot\TrayApp.cs"), 'internal const string Version = "([^"]+)";').Groups[1].Value
+$payload = [IO.Compression.ZipFile]::OpenRead($archive)
+try {
+    $reader = [IO.StreamReader]::new($payload.GetEntry('app/dist/index.html').Open())
+    try { $entryAsset = [regex]::Match($reader.ReadToEnd(), 'src="(/assets/[^"]+\.js)"').Groups[1].Value }
+    finally { $reader.Dispose() }
+    if (-not $trayVersion -or -not $entryAsset) { throw 'Missing tray version or frontend entry asset' }
+    $reader = [IO.StreamReader]::new($payload.GetEntry('app/dist' + $entryAsset).Open())
+    try { $matchingVersion = $reader.ReadToEnd().Contains('"' + $trayVersion + '"') }
+    finally { $reader.Dispose() }
+    if (-not $matchingVersion) { throw "Payload frontend does not match tray $trayVersion. Rebuild the frontend, run tray/package.cjs with a fresh tray/payload, then build with -Repack." }
+} finally { $payload.Dispose() }
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$outputRoot\CodexWebTray.exe" "/win32icon:$outputRoot\app.ico" "/win32manifest:$sourceRoot\app.manifest" "/resource:$archive,payload.zip" "/resource:$outputRoot\payload.id,payload.id" "/resource:$sourceRoot\github-mark.png,github-mark.png" @references @sources
 if ($LASTEXITCODE -ne 0) { throw 'Tray build failed' }
 Get-FileHash "$outputRoot\CodexWebTray.exe" -Algorithm SHA256

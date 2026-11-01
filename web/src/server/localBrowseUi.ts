@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
 import { open, readFile, readdir, stat } from 'node:fs/promises'
 
@@ -359,7 +360,9 @@ export async function createDirectoryListingHtml(localPath: string, options?: { 
 }
 
 export async function createTextEditorHtml(localPath: string): Promise<string> {
+  if ((await stat(localPath)).size > 10 * 1024 * 1024) throw new Error('File is too large to edit')
   const content = await readFile(localPath, 'utf8')
+  const revision = createHash('sha256').update(content).digest('hex')
   const parentPath = dirname(localPath)
   const language = languageForPath(localPath)
   const safeContentLiteral = escapeForInlineScriptString(content)
@@ -376,12 +379,8 @@ export async function createTextEditorHtml(localPath: string): Promise<string> {
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     button, a { background: #1b2a4a; color: #dbe6ff; border: 1px solid #345; padding: 6px 10px; border-radius: 6px; text-decoration: none; cursor: pointer; }
     button:hover, a:hover { filter: brightness(1.08); }
-    #editor { flex: 1 1 auto; min-height: 0; width: 100%; border: none; overflow: hidden; }
+    #editor { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; padding: 12px; border: none; resize: none; overflow: auto; background: #07101f; color: #dbe6ff; font: 13px/1.5 ui-monospace, monospace; tab-size: 2; }
     #status { margin-left: 8px; color: #8cc2ff; }
-    .ace_editor { background: #07101f !important; color: #dbe6ff !important; width: 100% !important; height: 100% !important; }
-    .ace_gutter { background: #07101f !important; color: #6f8eb5 !important; }
-    .ace_marker-layer .ace_active-line { background: #10213c !important; }
-    .ace_marker-layer .ace_selection { background: rgba(140, 194, 255, 0.3) !important; }
     .meta { opacity: 0.9; font-size: 12px; overflow-wrap: anywhere; }
   </style>
 </head>
@@ -394,33 +393,24 @@ export async function createTextEditorHtml(localPath: string): Promise<string> {
     </div>
     <div class="meta">${escapeHtml(localPath)} · ${escapeHtml(language)}</div>
   </div>
-  <div id="editor"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.2/ace.js"></script>
+  <textarea id="editor" aria-label="File contents" spellcheck="false"></textarea>
   <script>
     const saveBtn = document.getElementById('saveBtn');
     const status = document.getElementById('status');
-    const editor = ace.edit('editor');
-    editor.setTheme('ace/theme/tomorrow_night');
-    editor.session.setMode('ace/mode/${escapeHtml(language)}');
-    editor.setValue(${safeContentLiteral}, -1);
-    editor.setOptions({
-      fontSize: '13px',
-      wrap: true,
-      showPrintMargin: false,
-      useSoftTabs: true,
-      tabSize: 2,
-      behavioursEnabled: true,
-    });
-    editor.resize();
+    const editor = document.getElementById('editor');
+    editor.value = ${safeContentLiteral};
+    let revision = ${JSON.stringify(revision)};
 
     saveBtn.addEventListener('click', async () => {
       status.textContent = 'Saving...';
       const response = await fetch(location.pathname, {
         method: 'PUT',
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        body: editor.getValue(),
+        headers: { 'Content-Type': 'text/plain; charset=utf-8', 'If-Match': revision },
+        body: editor.value,
       });
-      status.textContent = response.ok ? 'Saved' : 'Save failed';
+      const result = await response.json();
+      if (response.ok) revision = result.revision;
+      status.textContent = response.ok ? 'Saved' : (result.error || 'Save failed');
     });
   </script>
 </body>

@@ -1,6 +1,6 @@
-import { recheckWriterControl } from '../api/conversationControl'
+import { conversationStates, recheckWriterControl } from '../api/conversationControl'
 import type { ZenModelMetadata } from '../types/zenModels'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
 
   archiveThread,
@@ -1430,7 +1430,12 @@ export function groupThreadsByDesktopProjects(groups: UiProjectGroup[], state: W
     const cwd = comparablePath(thread.cwd)
     const assignment = state.threadProjectAssignments?.[thread.id]
     const root = roots.find((item) => cwd === item.path || cwd.startsWith(`${item.path}/`))
-    const projectId = projectlessIds.has(thread.id) ? undefined : (assignment && rows.has(assignment) ? assignment : root?.id)
+    const nativeProject = projects.find(project => project.id === thread.projectId || project.serverProjectId === thread.projectId)
+      ?? state.remoteProjects?.find(project => project.id === thread.projectId)
+    // Legacy desktop chats can have a null native field while their JSON membership is still valid.
+    const projectId = thread.projectId
+      ? nativeProject?.id
+      : projectlessIds.has(thread.id) ? undefined : (assignment && rows.has(assignment) ? assignment : root?.id)
     const projectName = projectId ?? 'Projectless'
     const row = rows.get(projectName) ?? { projectName, threads: [] }
     row.threads.push({ ...thread, projectName, projectMembership: projectId ? 'project' : 'projectless' })
@@ -1571,6 +1576,7 @@ export function useDesktopState() {
     return ''
   }
   let stopNotificationStream: (() => void) | null = null
+  let stopControlStateWatch: (() => void) | null = null
   let projectSyncTimer: number | null = null
   let projectSyncPromise: Promise<void> | null = null
   let eventSyncTimer: number | null = null
@@ -3856,6 +3862,14 @@ export function useDesktopState() {
     }
 
     const notificationThreadId = extractThreadIdFromNotification(notification)
+    if (notification.method === 'web/thread/desktopUpdated' && notificationThreadId) {
+      const params = asRecord(notification.params)
+      const status = readString(asRecord(params?.status)?.type)
+      if (status === 'active' || status === 'idle' || status === 'systemError') {
+        setThreadInProgress(notificationThreadId, status === 'active')
+      }
+      return
+    }
     const notificationErrorState = readNotificationErrorState(notification)
     if (!notificationErrorState && notificationThreadId) {
       clearTransientTurnErrorForThread(notificationThreadId)
@@ -5065,6 +5079,7 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    projectId: string | null = null,
   ): Promise<string> {
     if (isUpdatingSpeedMode.value) return ''
 
@@ -5080,7 +5095,7 @@ export function useDesktopState() {
 
     try {
       try {
-        const startedThread = await startThread(targetCwd || undefined, selectedModel || undefined)
+        const startedThread = await startThread(targetCwd || undefined, selectedModel || undefined, projectId)
         threadId = startedThread.threadId
         setThreadModelId(threadId, startedThread.model)
         setThreadModelProviderId(threadId, startedThread.modelProvider || activeProviderId.value)
@@ -5088,7 +5103,7 @@ export function useDesktopState() {
       } catch (unknownError) {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
-          const fallbackThread = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID)
+          const fallbackThread = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID, projectId)
           threadId = fallbackThread.threadId
           setThreadModelId(threadId, fallbackThread.model)
           setThreadModelProviderId(threadId, fallbackThread.modelProvider || activeProviderId.value)
@@ -5668,12 +5683,12 @@ export function useDesktopState() {
     await syncFromNotifications()
   }
 
-  function refreshWorkspaceProjects(): Promise<void> {
-    if (projectSyncPromise) return projectSyncPromise
+  function refreshWorkspaceProjects(force = false): Promise<void> {
+    if (projectSyncPromise) return force ? projectSyncPromise.then(() => loadThreads({ force: true })) : projectSyncPromise
     projectSyncPromise = (async () => {
       try {
         const next = await getWorkspaceRootsState()
-        if (JSON.stringify(next) === JSON.stringify(workspaceRootsState.value)) return
+        if (!force && JSON.stringify(next) === JSON.stringify(workspaceRootsState.value)) return
         workspaceRootsState.value = next
         loadedThreadListRootsState = next
         await hydrateWorkspaceRootsStateIfNeeded(loadedThreadListGroups, next)
@@ -5702,6 +5717,11 @@ export function useDesktopState() {
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
+    stopControlStateWatch = watch(() => conversationStates[selectedThreadId.value], state => {
+      if (state?.executionSource === 'desktop' && ['running', 'approval', 'idle'].includes(state.activity)) {
+        setThreadInProgress(state.threadId, state.activity !== 'idle')
+      }
+    }, { immediate: true })
     if (hasLoadedThreads.value) void refreshWorkspaceProjects()
     scheduleProjectSync()
     void loadPendingServerRequestsFromBridge()
@@ -5743,6 +5763,7 @@ export function useDesktopState() {
   }
 
   function stopPolling(): void {
+    stopControlStateWatch?.(); stopControlStateWatch = null
     if (projectSyncTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(projectSyncTimer)
       projectSyncTimer = null

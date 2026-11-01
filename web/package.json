@@ -24,7 +24,7 @@
     "cli"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "bin": {
     "codexapp": "dist-cli/index.js",
@@ -53,6 +53,7 @@
     "build": "vue-tsc --noEmit && vite build && node scripts/collect-frontend-licenses.cjs && tsup",
     "postinstall": "node scripts/fix-pty-native-build.cjs",
     "test:unit": "vitest run",
+    "check": "node scripts/check.cjs",
     "preview": "vite preview",
     "prepublishOnly": "npm run build",
     "profile:browser": "node scripts/profile-browser-runtime.cjs",

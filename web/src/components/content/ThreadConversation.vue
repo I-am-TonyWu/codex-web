@@ -1,6 +1,5 @@
 <template>
   <section v-mermaid class="conversation-root" @mermaid-resize="onPendingImageSettled" @contextmenu.capture="onConversationContextMenu">
-    <a v-if="cwd" class="conversation-files-link" :href="toBrowseUrl(cwd)" target="_blank" rel="noopener">查看 / 下载项目文件</a>
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
@@ -524,7 +523,7 @@
                 <a
                   v-if="isTurnErrorMessage(message)"
                   class="turn-error-feedback"
-                  :href="feedbackMailto"
+                  :href="feedbackUrl" target="_blank" rel="noopener noreferrer"
                   @click="prepareTurnErrorFeedback($event, message.text)"
                 >
                   Send feedback
@@ -683,7 +682,7 @@
                   @click="emit('continueOnWeb', activeThreadId)">
                   {{ isContinuingOnWeb ? '正在创建接续对话…' : '在网页接续（保留原对话）' }}
                 </button>
-                <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
+                <a class="live-overlay-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">Send feedback</a>
               </div>
             </article>
           </div>
@@ -909,14 +908,14 @@ const fileLinkContextBrowseUrl = ref('')
 const fileLinkContextEditUrl = ref('')
 const { isMobile } = useMobile()
 const { t } = useUiLanguage()
-const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
-const feedbackMailto = feedbackMailtoBase()
+const { buildFeedbackUrl, feedbackBaseUrl, recordVisibleFailure } = useFeedbackDiagnostics()
+const feedbackUrl = feedbackBaseUrl()
 
 function prepareLiveErrorFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
   const target = event.currentTarget
   if (target instanceof HTMLAnchorElement) {
-    target.href = buildFeedbackMailto()
+    target.href = buildFeedbackUrl()
   }
 }
 
@@ -924,7 +923,7 @@ function prepareTurnErrorFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
   const target = event.currentTarget
   if (target instanceof HTMLAnchorElement) {
-    target.href = buildFeedbackMailto()
+    target.href = buildFeedbackUrl()
   }
 }
 
@@ -1068,7 +1067,7 @@ const taskState = computed(() => {
     activity: control?.activity,
     transferring: control?.transferring,
     turnStatus: props.turnStatus,
-    connectionUncertain: !controlStatusKnown.value,
+    connectionUncertain: !controlStatusKnown.value || (control?.executionSource === 'desktop' && control.activity === 'unknown'),
   })
 })
 
@@ -4412,8 +4411,7 @@ onBeforeUnmount(() => {
 @reference "tailwindcss";
 
 
-.conversation-status-dock { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 14px; width: calc(100% - 48px); max-width: var(--chat-column-max, 45rem); max-height: 45%; overflow-y: auto; margin: auto auto 0; padding: 5px 0; color: var(--activity-muted, #64748b); font-size: 0.75rem; }
-.conversation-status-dock :deep(.control-bar[open]) { flex-basis: 100%; }
+.conversation-status-dock { flex-shrink: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 14px; width: calc(100% - 48px); max-width: var(--chat-column-max, 45rem);  margin: auto auto 0; padding: 5px 0; color: var(--activity-muted, #64748b); font-size: 0.75rem; }
 .task-status-bar { min-width: 0; flex: 1 1 240px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; font-size: 0.75rem; }
 .task-status-copy { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px; line-height: 1.5; }
 .task-status-copy strong { font-weight: 600; }

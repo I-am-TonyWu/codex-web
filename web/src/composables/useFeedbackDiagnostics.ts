@@ -1,13 +1,8 @@
 import { computed, ref } from 'vue'
 
-const FEEDBACK_EMAIL = 'brutalstrikedevs@gmail.com'
+export const CODEX_WEB_REPOSITORY = 'https://github.com/I-am-TonyWu/codex-web'
 const MAX_DIAGNOSTICS = 20
 const MAX_BODY_CHARS = 6500
-const MAX_PAGE_TEXT_CHARS = 1800
-const MAX_STORAGE_ITEMS = 12
-const MAX_STORAGE_VALUE_CHARS = 240
-const SENSITIVE_STORAGE_PATTERN = /token|secret|password|passwd|credential|authorization|auth|bearer|cookie|session|key/i
-
 export type FeedbackDiagnosticKind = 'window-error' | 'unhandled-rejection' | 'fetch-error' | 'api-response' | 'visible-error'
 
 export type FeedbackDiagnostic = {
@@ -50,75 +45,8 @@ function normalizeFetchMethod(input: RequestInfo | URL, init?: RequestInit): str
   return 'GET'
 }
 
-function normalizeSubjectMessage(message?: string): string {
-  const firstLine = (message || '').split(/\r?\n/, 1)[0] ?? ''
-  return firstLine.replace(/\s+/g, ' ').trim().slice(0, 80) || 'issue report'
-}
-
-function encodeMailtoParam(value: string): string {
-  return encodeURIComponent(value)
-}
-
-export function feedbackMailtoBase(): string {
-  return `mailto:${FEEDBACK_EMAIL}`
-}
-
-function readVisiblePageText(): string {
-  if (typeof document === 'undefined') return 'unknown'
-  const text = document.body?.innerText
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim() ?? ''
-  if (!text) return 'No visible page text captured.'
-  return text.length > MAX_PAGE_TEXT_CHARS
-    ? `${text.slice(0, MAX_PAGE_TEXT_CHARS)}\n...[truncated]`
-    : text
-}
-
-function summarizeStorageValue(key: string, value: string): string {
-  const normalized = value
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+/g, ' ')
-    .trim()
-  if (!normalized) return ''
-  if (SENSITIVE_STORAGE_PATTERN.test(key) || SENSITIVE_STORAGE_PATTERN.test(normalized)) {
-    return `[omitted sensitive value, ${normalized.length} chars]`
-  }
-  return normalized.length > MAX_STORAGE_VALUE_CHARS
-    ? `${normalized.slice(0, MAX_STORAGE_VALUE_CHARS)}...[truncated, ${normalized.length} chars total]`
-    : normalized
-}
-
-function readStorageSnapshot(storage: Storage | undefined, label: string): string {
-  if (!storage) return `${label}: unavailable`
-  try {
-    const rows: string[] = []
-    const length = Math.min(storage.length, MAX_STORAGE_ITEMS)
-    for (let index = 0; index < length; index += 1) {
-      const key = storage.key(index)
-      if (!key) continue
-      rows.push(`${key}=${summarizeStorageValue(key, storage.getItem(key) ?? '')}`)
-    }
-    const suffix = storage.length > MAX_STORAGE_ITEMS ? `\n...${storage.length - MAX_STORAGE_ITEMS} more item(s)` : ''
-    return `${label}:\n${rows.join('\n') || 'empty'}${suffix}`
-  } catch (error) {
-    return `${label}: unavailable (${normalizeSubjectMessage(normalizeMessage(error))})`
-  }
-}
-
-function readBrowserStateSnapshot(): string {
-  if (typeof window === 'undefined') return 'unknown'
-  return [
-    `Path: ${window.location.pathname || '/'}`,
-    `Hash: ${window.location.hash || '(none)'}`,
-    `Search: ${window.location.search || '(none)'}`,
-    `Online: ${typeof navigator === 'undefined' ? 'unknown' : String(navigator.onLine)}`,
-    `Language: ${typeof navigator === 'undefined' ? 'unknown' : navigator.language}`,
-    `Platform: ${typeof navigator === 'undefined' ? 'unknown' : navigator.platform}`,
-    readStorageSnapshot(window.localStorage, 'localStorage'),
-    readStorageSnapshot(window.sessionStorage, 'sessionStorage'),
-  ].join('\n')
+export function feedbackBaseUrl(): string {
+  return `${CODEX_WEB_REPOSITORY}/issues/new`
 }
 
 export function recordFeedbackDiagnostic(input: Omit<FeedbackDiagnostic, 'atIso'> & { atIso?: string }): void {
@@ -144,11 +72,10 @@ export function recordFeedbackDiagnostic(input: Omit<FeedbackDiagnostic, 'atIso'
   diagnostics.value = [next, ...diagnostics.value].slice(0, MAX_DIAGNOSTICS)
 }
 
-export function buildFeedbackMailto(entries: FeedbackDiagnostic[] = diagnostics.value): string {
+export function buildFeedbackUrl(entries: FeedbackDiagnostic[] = diagnostics.value): string {
   const viewport = typeof window === 'undefined'
     ? 'unknown'
     : `${window.innerWidth}x${window.innerHeight} @${window.devicePixelRatio || 1}x`
-  const currentUrl = typeof window === 'undefined' ? 'unknown' : window.location.href
   const userAgent = typeof navigator === 'undefined' ? 'unknown' : navigator.userAgent
   const appVersion = import.meta.env.VITE_APP_VERSION || 'unknown'
   const worktreeName = import.meta.env.VITE_WORKTREE_NAME || 'unknown'
@@ -156,41 +83,36 @@ export function buildFeedbackMailto(entries: FeedbackDiagnostic[] = diagnostics.
     const parts = [
       `${index + 1}. [${entry.atIso}] ${entry.kind}`,
       entry.method ? `${entry.method}` : '',
-      entry.url ?? '',
+
       typeof entry.status === 'number' ? `${entry.status} ${entry.statusText ?? ''}`.trim() : '',
-      entry.message,
+
     ].filter(Boolean)
     return parts.join(' | ')
   }).join('\n')
 
   const body = [
-    'What happened?',
+    '## 遇到了什么问题？',
     '',
     '',
-    'Context',
-    `URL: ${currentUrl}`,
+    '## 环境',
     `User agent: ${userAgent}`,
     `Viewport: ${viewport}`,
     `App version: ${appVersion}`,
     `Worktree: ${worktreeName}`,
     '',
-    'Browser/app state',
-    readBrowserStateSnapshot(),
+    '## 最小诊断信息',
+    recentDiagnostics || '没有捕获到诊断信息。',
     '',
-    'Recent diagnostics',
-    recentDiagnostics || 'No diagnostics captured.',
-    '',
-    'Visible page text',
-    readVisiblePageText(),
+    '请补充复现步骤和预期行为，检查内容后再提交。请勿填写密码、Token 或私人聊天内容。',
   ].join('\n').slice(0, MAX_BODY_CHARS)
 
-  const subject = `Codex Web feedback: ${normalizeSubjectMessage(entries[0]?.message)}`
-  return `mailto:${FEEDBACK_EMAIL}?subject=${encodeMailtoParam(subject)}&body=${encodeMailtoParam(body)}`
+  const title = `[反馈] codex-web ${appVersion}`
+  return `${feedbackBaseUrl()}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`
 }
 
-export function openFeedbackMail(): void {
+export function openFeedbackIssue(): void {
   if (typeof window === 'undefined') return
-  window.location.href = buildFeedbackMailto()
+  window.open(buildFeedbackUrl(), '_blank', 'noopener,noreferrer')
 }
 
 export function installFeedbackDiagnostics(): void {
@@ -284,8 +206,8 @@ export function useFeedbackDiagnostics() {
     diagnostics,
     hasFeedbackDiagnostics,
     recordVisibleFailure,
-    openFeedbackMail,
-    buildFeedbackMailto,
-    feedbackMailtoBase,
+    openFeedbackIssue,
+    buildFeedbackUrl,
+    feedbackBaseUrl,
   }
 }

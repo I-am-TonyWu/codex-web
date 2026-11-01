@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
@@ -9,6 +10,8 @@ namespace CodexWebTray {
         public string ApplicationId { get; set; }
         public string PolicyId { get; set; }
         public string Hostname { get; set; }
+        public string[] Hostnames { get; set; }
+        public string[] Domains() { return (Hostnames != null && Hostnames.Length > 0 ? Hostnames : new[]{Hostname}).Where(x => !String.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); }
     }
     internal static class CloudflareSite {
         internal static string FilePath = Path.Combine(Paths.Root, "cloudflare-site.json");
@@ -20,7 +23,7 @@ namespace CodexWebTray {
             Guid app, policy;
             if (site == null || !Regex.IsMatch(site.AccountId ?? "", "\\A[0-9a-fA-F]{32}\\z") ||
                 !Guid.TryParse(site.ApplicationId, out app) || !Guid.TryParse(site.PolicyId, out policy) ||
-                Uri.CheckHostName(site.Hostname ?? "") != UriHostNameType.Dns)
+                site.Domains().Length == 0 || site.Domains().Any(x => Uri.CheckHostName(x) != UriHostNameType.Dns))
                 throw new ArgumentException("请在“Cloudflare 站点”中填写有效的账户 ID、应用 ID、策略 ID 和域名（不含 https://）。");
         }
         internal static void Save(SiteConfiguration site) {

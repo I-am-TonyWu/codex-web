@@ -69,7 +69,7 @@ export function taskPresentation(input: {
   if (input.transferring) return { kind: 'unknown', label: '正在确认状态', detail: '会话交接中' }
   if (input.pending) return { kind: 'waiting', label: '等待你处理', detail: '请查看下方的审批或问题' }
   if (input.sending) return { kind: 'running', label: '正在提交', detail: '等待后台确认任务开始' }
-  if (input.running) return { kind: 'running', label: '任务运行中', detail: '' }
+  if (input.running || input.activity === 'running') return { kind: 'running', label: '任务运行中', detail: '' }
   if (input.error) return { kind: 'failed', label: '任务出错', detail: '' }
   const latest = input.messages.at(-1)
   const status = input.turnStatus ?? latest?.turnStatus

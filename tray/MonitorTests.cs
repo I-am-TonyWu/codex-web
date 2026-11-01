@@ -29,8 +29,8 @@ namespace CodexWebTray {
                 r.Health=false; m.Tick(now); Check(m.State==Lamp.Error && r.Running, "One unhealthy probe does not kill active jobs");
                 r.Health=true; m.Tick(now); Check(m.State==Lamp.Healthy, "Transient health failure recovers without restart");
                 r.Health=false; for(int i=0;i<5;i++) m.Tick(now.AddSeconds(i*3));
-                Check(!r.Running && m.State==Lamp.Error, "Five consecutive failures stop only owned runtime");
-                r.Health=true; m.Tick(now.AddSeconds(60)); Check(m.State==Lamp.Healthy, "Unhealthy runtime restarts after backoff");
+                Check(r.Running && m.State==Lamp.Error, "Repeated failed probes preserve potentially active jobs");
+                r.Health=true; m.Tick(now.AddSeconds(60)); Check(m.State==Lamp.Healthy, "HTTP health recovery does not restart a running executor");
                 r.Running=false; m.Tick(now.AddSeconds(63)); Check(r.Running && m.State==Lamp.Healthy, "Crashed runtime is automatically restarted");
                 Check(DesktopIdentity.Matches("ChatGPT", @"C:\Program Files\WindowsApps\OpenAI.Codex_26.917.8451.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe"), "Actual Windows Store Codex desktop recognized");
                 Check(!DesktopIdentity.Matches("codex", @"C:\Users\test\AppData\Local\OpenAI\Codex\bin\abcdef\codex.exe"), "Own Codex CLI is excluded");

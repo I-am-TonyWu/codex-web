@@ -6,6 +6,7 @@
 
 | 版本 / Version | 类型 / Channel | 内容 / Changes | 下载 / Download |
 |---|---|---|---|
+| 1.6.1 | 最新 / Latest | CLI 路径重新发现、持久分叉、90 MiB 上传、原生项目归属与已知限制 | [v1.6.1](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) |
 | 1.4.4 | 预览 / Pre-release | 自然语言工具摘要、折叠过程图片、固定任务状态、主机持有账户、Ctrl+Enter | [v1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4) |
 | 1.4.3.9 | 预览 / Pre-release | 桌面持有历史会话时通过本机协同通道发送、同步结果及审批 | [v1.4.3.9](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.9) |
 | 1.4.3.8 | 预览 / Pre-release | 修正占用状态缓存、原对话写入重查、手动发送重试 | [v1.4.3.8](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.8) |

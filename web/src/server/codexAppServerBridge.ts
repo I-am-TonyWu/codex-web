@@ -17,11 +17,18 @@ import { normalizeCodexTurnInput } from '../shared/codexTurnInput.js'
 import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycle.js'
 import { recheckThreadWriter } from './threadWriterProbe.js'
 import { DesktopThreadBridge } from './desktopThreadBridge.js'
+import { listNativeProjects, matchNativeProject, resolveNativeProject, saveNativeThreadProject, type ProjectClient } from './nativeProjects.js'
 import { ConversationControl, ControlError, type ControlProof, type ControlClient } from './conversationControl.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
+import { disposeSkillTranslations } from './skillPresentation.js'
 import { ExtensionCatalog } from './extensionCatalog.js'
-import { handleSkillsRoutes } from './skillsRoutes.js'
+import { handleSkillsRoutes, invalidateInstalledSkillsCache } from './skillsRoutes.js'
+import { updateJsonState, parseJsonState, readStateSnapshot as readWorkspaceStateSnapshot, replaceFileSnapshot, serializeFileUpdate } from './jsonState.js'
+import { ExpiringSnapshot } from './expiringSnapshot.js'
+import { readRequestBody, HttpError, isRequestOriginAllowed } from './requestPolicy.js'
+import { readUploadedFile } from './fileUploads.js'
+import { rememberForkedThread, forgetForkedThread, includeForkedThreads } from './forkedThreads.js'
 import {
   FREE_MODE_DEFAULT_MODEL,
   getCachedFreeModels,
@@ -1946,8 +1953,7 @@ async function importProjectZip(buffer: Buffer, destinationParent: string): Prom
     }
     importedSessionRecords.push(importedRecord)
     if (importedRecord.title) {
-      const cache = await readThreadTitleCache()
-      await writeThreadTitleCache(updateThreadTitleCache(cache, importedThreadId, importedRecord.title))
+      await writeThreadTitleCache(cache => updateThreadTitleCache(cache, importedThreadId, importedRecord.title))
     }
     importedSessions += 1
   }
@@ -4308,9 +4314,6 @@ function getCodexGlobalStatePath(): string {
   return join(getCodexHomeDir(), '.codex-global-state.json')
 }
 
-function getTelegramBridgeConfigPath(): string {
-  return join(getCodexHomeDir(), 'telegram-bridge.json')
-}
 
 function getCodexSessionIndexPath(): string {
   return join(getCodexHomeDir(), 'session_index.jsonl')
@@ -4803,11 +4806,6 @@ let sessionIndexThreadTitleCacheState: SessionIndexThreadTitleCacheState = {
   cache: EMPTY_THREAD_TITLE_CACHE,
 }
 
-type TelegramBridgeConfigState = {
-  botToken: string
-  chatIds: number[]
-  allowedUserIds: Array<number | '*'>
-}
 
 function normalizeThreadTitleCache(value: unknown): ThreadTitleCache {
   const record = asRecord(value)
@@ -4910,17 +4908,8 @@ async function readThreadTitleCache(): Promise<ThreadTitleCache> {
   }
 }
 
-async function writeThreadTitleCache(cache: ThreadTitleCache): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  payload['thread-titles'] = cache
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+async function writeThreadTitleCache(update: (cache: ThreadTitleCache) => ThreadTitleCache): Promise<void> {
+  await updateJsonState(getCodexGlobalStatePath(), payload => { payload['thread-titles'] = update(normalizeThreadTitleCache(payload['thread-titles'])) })
 }
 
 async function readPinnedThreadIds(): Promise<string[]> {
@@ -4935,17 +4924,7 @@ async function readPinnedThreadIds(): Promise<string[]> {
 }
 
 async function writePinnedThreadIds(threadIds: string[]): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-
-  payload[PINNED_THREAD_IDS_KEY] = normalizePinnedThreadIds(threadIds)
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  await updateJsonState(getCodexGlobalStatePath(), payload => { payload[PINNED_THREAD_IDS_KEY] = normalizePinnedThreadIds(threadIds) })
 }
 
 const FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY = 'first-launch-plugins-card-dismissed'
@@ -5036,48 +5015,21 @@ function normalizeThreadQueueState(value: unknown): ThreadQueueState {
   return state
 }
 
-let threadQueueMutationChain: Promise<unknown> = Promise.resolve()
-
 async function readThreadQueueState(): Promise<ThreadQueueState> {
-  const statePath = getCodexGlobalStatePath()
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return normalizeThreadQueueState(payload[THREAD_QUEUE_STATE_KEY])
-  } catch {
-    return {}
-  }
-}
-
-async function writeThreadQueueStateUnlocked(nextState: ThreadQueueState): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  const normalized = normalizeThreadQueueState(nextState)
-  if (Object.keys(normalized).length > 0) {
-    payload[THREAD_QUEUE_STATE_KEY] = normalized
-  } else {
-    delete payload[THREAD_QUEUE_STATE_KEY]
-  }
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  const snapshot = await readWorkspaceStateSnapshot(getCodexGlobalStatePath())
+  return normalizeThreadQueueState(parseJsonState(snapshot)[THREAD_QUEUE_STATE_KEY])
 }
 
 async function withThreadQueueStateUpdate<T>(
   update: (state: ThreadQueueState) => ThreadQueueStateUpdate<T> | Promise<ThreadQueueStateUpdate<T>>,
 ): Promise<T> {
-  const run = threadQueueMutationChain.then(async () => {
-    const currentState = await readThreadQueueState()
-    const { nextState, result } = await update(currentState)
-    await writeThreadQueueStateUnlocked(nextState)
+  return updateJsonState(getCodexGlobalStatePath(), async payload => {
+    const { nextState, result } = await update(normalizeThreadQueueState(payload[THREAD_QUEUE_STATE_KEY]))
+    const normalized = normalizeThreadQueueState(nextState)
+    if (Object.keys(normalized).length > 0) payload[THREAD_QUEUE_STATE_KEY] = normalized
+    else delete payload[THREAD_QUEUE_STATE_KEY]
     return result
   })
-  threadQueueMutationChain = run.catch(() => {})
-  return run
 }
 
 async function writeThreadQueueState(nextState: ThreadQueueState): Promise<void> {
@@ -5198,16 +5150,7 @@ async function readFirstLaunchPluginsCardDismissed(): Promise<boolean> {
 }
 
 async function writeFirstLaunchPluginsCardDismissed(dismissed: boolean): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  payload[FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY] = dismissed === true
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  await updateJsonState(getCodexGlobalStatePath(), payload => { payload[FIRST_LAUNCH_PLUGINS_CARD_DISMISSED_KEY] = dismissed === true })
 }
 
 function getSessionIndexFileSignature(stats: { mtimeMs: number; size: number }): string {
@@ -5398,7 +5341,7 @@ export async function canonicalizeThreadListResponseForRead(
   }
 }
 
-export async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
+export async function readWorkspaceRootsState(client?: ProjectClient): Promise<WorkspaceRootsState> {
   const statePath = getCodexGlobalStatePath()
   let payload: Record<string, unknown> = {}
 
@@ -5412,6 +5355,12 @@ export async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
   }
 
   const metadata = readDesktopProjectMetadata(payload)
+  if (client && metadata.localProjects) {
+    try {
+      const native = await listNativeProjects(client)
+      metadata.localProjects = metadata.localProjects.map(project => ({ ...project, serverProjectId: matchNativeProject(native, project)?.id }))
+    } catch { /* Older clients retain the existing project list. */ }
+  }
   const projects = metadata.localProjects
   const order = projects ? [...new Set(projects.flatMap((project) => project.rootPaths))] : normalizeStringArray(payload['electron-saved-workspace-roots'])
   const labels = projects ? Object.fromEntries(projects.flatMap((project) => project.rootPaths.map((path) => [path, project.name]))) : normalizeStringRecord(payload['electron-workspace-root-labels'])
@@ -5432,10 +5381,7 @@ export async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
 export async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise<void> {
   const state = await canonicalizeWorkspaceRootsState(nextState)
   const statePath = getCodexGlobalStatePath()
-  const snapshot = await readWorkspaceStateSnapshot(statePath)
-  const payload = snapshot === null ? {} : asRecord(JSON.parse(snapshot))
-  if (!payload) throw new Error('Invalid desktop workspace state; refusing to overwrite it')
-
+  await updateJsonState(statePath, async payload => {
   payload['electron-saved-workspace-roots'] = normalizeStringArray(state.order)
   payload['electron-workspace-root-labels'] = normalizeStringRecord(state.labels)
   payload['active-workspace-roots'] = normalizeStringArray(state.active)
@@ -5456,21 +5402,11 @@ export async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): 
     payload['local-projects'] = projects
   }
 
-  await writeWorkspaceStateSnapshot(statePath, snapshot, payload)
-}
-
-async function readWorkspaceStateSnapshot(path: string): Promise<string | null> {
-  try { return await readFile(path, 'utf8') }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+  })
 }
 
 export async function writeWorkspaceStateSnapshot(path: string, snapshot: string | null, next: Record<string, unknown>): Promise<void> {
-  const temporaryPath = `${path}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporaryPath, JSON.stringify(next), { encoding: 'utf8', mode: 0o600 })
-    if (await readWorkspaceStateSnapshot(path) !== snapshot) throw new Error('Desktop projects changed; refresh and retry')
-    await rename(temporaryPath, path)
-  } finally { await rm(temporaryPath, { force: true }).catch(() => undefined) }
+  await serializeFileUpdate(path, () => replaceFileSnapshot(path, snapshot, JSON.stringify(next)))
 }
 
 let workspaceRootsMutation: Promise<void> = Promise.resolve()
@@ -5538,73 +5474,6 @@ async function rollbackCreatedWorktree(
   }
 }
 
-function normalizeTelegramBridgeConfig(value: unknown): TelegramBridgeConfigState {
-  const record = asRecord(value)
-  if (!record) return { botToken: '', chatIds: [], allowedUserIds: [] }
-  const botToken = typeof record.botToken === 'string' ? record.botToken.trim() : ''
-  const rawChatIds = Array.isArray(record.chatIds) ? record.chatIds : []
-  const chatIds = Array.from(new Set(rawChatIds
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    .map((value) => Math.trunc(value)))).slice(0, 50)
-  const rawAllowedUserIds = Array.isArray(record.allowedUserIds) ? record.allowedUserIds : []
-  const allowAllUsers = rawAllowedUserIds.some((value) => typeof value === 'string' && value.trim() === '*')
-  const normalizedAllowedUserIds = Array.from(new Set(rawAllowedUserIds
-    .map((value) => {
-      if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
-      if (typeof value === 'string') {
-        const normalized = value.trim().replace(/^(telegram|tg):/i, '').trim()
-        if (/^-?\d+$/.test(normalized)) {
-          return Number.parseInt(normalized, 10)
-        }
-      }
-      return Number.NaN
-    })
-    .filter((value) => Number.isFinite(value)))).slice(0, 100)
-  const allowedUserIds: Array<number | '*'> = allowAllUsers
-    ? ['*' as const, ...normalizedAllowedUserIds]
-    : normalizedAllowedUserIds
-  return { botToken, chatIds, allowedUserIds }
-}
-
-async function readTelegramBridgeConfig(): Promise<TelegramBridgeConfigState> {
-  const telegramConfigPath = getTelegramBridgeConfigPath()
-  try {
-    const raw = await readFile(telegramConfigPath, 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return normalizeTelegramBridgeConfig(payload)
-  } catch {
-    return { botToken: '', chatIds: [], allowedUserIds: [] }
-  }
-}
-
-async function writeTelegramBridgeConfig(nextState: TelegramBridgeConfigState): Promise<void> {
-  const normalized = normalizeTelegramBridgeConfig(nextState)
-  const telegramConfigPath = getTelegramBridgeConfigPath()
-  await writeFile(telegramConfigPath, JSON.stringify({
-    botToken: normalized.botToken,
-    chatIds: normalized.chatIds,
-    allowedUserIds: normalized.allowedUserIds,
-  }), 'utf8')
-}
-
-let telegramBridgeConfigMutation: Promise<void> = Promise.resolve()
-
-function rememberTelegramChatId(chatId: number): Promise<void> {
-  const normalizedChatId = Math.trunc(chatId)
-  if (!Number.isFinite(normalizedChatId)) return Promise.resolve()
-
-  telegramBridgeConfigMutation = telegramBridgeConfigMutation.then(async () => {
-    const current = await readTelegramBridgeConfig()
-    if (current.chatIds.includes(normalizedChatId)) return
-    const next = {
-      ...current,
-      chatIds: [normalizedChatId, ...current.chatIds].slice(0, 50),
-    }
-    await writeTelegramBridgeConfig(next)
-  })
-  return telegramBridgeConfigMutation
-}
-
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const raw = await readRawBody(req)
   if (raw.length === 0) return null
@@ -5613,74 +5482,22 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(text) as unknown
 }
 
-async function readRawBody(req: IncomingMessage): Promise<Buffer> {
-  const chunks: Uint8Array[] = []
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
-  }
-  return Buffer.concat(chunks)
-}
+const readRawBody = readRequestBody
 
-function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
-  for (let i = start; i <= buf.length - needle.length; i++) {
-    let match = true
-    for (let j = 0; j < needle.length; j++) {
-      if (buf[i + j] !== needle[j]) { match = false; break }
-    }
-    if (match) return i
-  }
-  return -1
-}
-
-function handleFileUpload(req: IncomingMessage, res: ServerResponse): void {
-  const chunks: Buffer[] = []
-  req.on('data', (chunk: Buffer) => chunks.push(chunk))
-  req.on('end', async () => {
-    try {
-      const body = Buffer.concat(chunks)
-      const contentType = req.headers['content-type'] ?? ''
-      const boundaryMatch = contentType.match(/boundary=(.+)/i)
-      if (!boundaryMatch) { setJson(res, 400, { error: 'Missing multipart boundary' }); return }
-      const boundary = boundaryMatch[1]
-      const boundaryBuf = Buffer.from(`--${boundary}`)
-      const parts: Buffer[] = []
-      let searchStart = 0
-      while (searchStart < body.length) {
-        const idx = body.indexOf(boundaryBuf, searchStart)
-        if (idx < 0) break
-        if (searchStart > 0) parts.push(body.subarray(searchStart, idx))
-        searchStart = idx + boundaryBuf.length
-        if (body[searchStart] === 0x0d && body[searchStart + 1] === 0x0a) searchStart += 2
-      }
-      let fileName = 'uploaded-file'
-      let fileData: Buffer | null = null
-      const headerSep = Buffer.from('\r\n\r\n')
-      for (const part of parts) {
-        const headerEnd = bufferIndexOf(part, headerSep)
-        if (headerEnd < 0) continue
-        const headers = part.subarray(0, headerEnd).toString('utf8')
-        const fnMatch = headers.match(/filename="([^"]+)"/i)
-        if (!fnMatch) continue
-        fileName = fnMatch[1].replace(/[/\\]/g, '_')
-        let end = part.length
-        if (end >= 2 && part[end - 2] === 0x0d && part[end - 1] === 0x0a) end -= 2
-        fileData = part.subarray(headerEnd + 4, end)
-        break
-      }
-      if (!fileData) { setJson(res, 400, { error: 'No file in request' }); return }
+async function handleFileUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let destDir = ''
+  try {
+      const { name: fileName, data: fileData } = await readUploadedFile(req)
       const uploadDir = join(tmpdir(), 'codex-web-uploads')
       await mkdir(uploadDir, { recursive: true })
-      const destDir = await mkdtemp(join(uploadDir, 'f-'))
+      destDir = await mkdtemp(join(uploadDir, 'f-'))
       const destPath = join(destDir, fileName)
       await writeFile(destPath, fileData)
       setJson(res, 200, { path: destPath })
-    } catch (err) {
-      setJson(res, 500, { error: getErrorMessage(err, 'Upload failed') })
-    }
-  })
-  req.on('error', (err: Error) => {
-    setJson(res, 500, { error: getErrorMessage(err, 'Upload stream error') })
-  })
+  } catch (err) {
+    if (destDir) await rm(destDir, { recursive: true, force: true }).catch(() => undefined)
+    if (!res.destroyed) setJson(res, err instanceof HttpError ? err.statusCode : 500, { error: getErrorMessage(err, 'Upload failed') })
+  }
 }
 
 function httpPost(
@@ -5908,6 +5725,16 @@ class AppServerProcess {
     const proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'], ...(spawnEnv ? { env: spawnEnv } : {}) })
     this.process = proc
 
+    const failPending = (error: Error) => {
+      if (this.process !== proc) return
+      for (const request of this.pending.values()) request.reject(error)
+      this.pending.clear()
+    }
+    proc.once('error', error => {
+      failPending(error)
+      if (!proc.pid && this.process === proc) { this.process = null; this.initialized = false; this.initializePromise = null }
+    })
+    proc.stdin.on('error', failPending)
     proc.stdout.setEncoding('utf8')
     proc.stdout.on('data', (chunk: string) => {
       this.readBuffer += chunk
@@ -5997,6 +5824,7 @@ class AppServerProcess {
     this.recordStreamEvent(notification)
     this.captureItemFromNotification(notification)
     const nThreadId = this.extractThreadIdFromParams(notification.params)
+    if (nThreadId && notification.method === 'thread/closed') this.clearThreadCaches(nThreadId)
     if (nThreadId) {
       this.invalidateLiveStateCache(nThreadId)
       this.threadTurnPageReadCacheByThreadId.delete(nThreadId)
@@ -6057,8 +5885,21 @@ class AppServerProcess {
     return buffer.slice(-limit)
   }
 
+  private clearThreadCaches(threadId: string): void {
+    this.streamEventsByThreadId.delete(threadId)
+    this.lastThreadReadSnapshotByThreadId.delete(threadId)
+    this.threadTurnPageReadCacheByThreadId.delete(threadId)
+    this.capturedItemsByThreadId.delete(threadId)
+    this.liveStateCache.delete(threadId)
+  }
+
+  private boundReadCache<T>(cache: Map<string, T>): void {
+    while (cache.size > 256) cache.delete(cache.keys().next().value!)
+  }
+
   storeThreadReadSnapshot(threadId: string, snapshot: unknown): void {
     this.lastThreadReadSnapshotByThreadId.set(threadId, snapshot)
+    this.boundReadCache(this.lastThreadReadSnapshotByThreadId)
     this.threadTurnPageReadCacheByThreadId.delete(threadId)
   }
 
@@ -6083,6 +5924,7 @@ class AppServerProcess {
         result,
         expiresAt: Date.now() + THREAD_TURN_PAGE_READ_CACHE_TTL_MS,
       })
+      this.boundReadCache(this.threadTurnPageReadCacheByThreadId)
       return result
     }).finally(() => {
       this.threadTurnPageReadPromiseByThreadId.delete(threadId)
@@ -6094,6 +5936,7 @@ class AppServerProcess {
 
   cacheLiveState(threadId: string, data: unknown, turnCount: number, sessionSize: number): void {
     this.liveStateCache.set(threadId, { data, turnCount, sessionSize })
+    this.boundReadCache(this.liveStateCache)
   }
 
   getCachedLiveState(threadId: string, turnCount: number, sessionSize: number): unknown | null {
@@ -6291,14 +6134,16 @@ class AppServerProcess {
     const id = this.nextId++
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
-
-      this.sendLine({
-        jsonrpc: '2.0',
-        id,
-        method,
-        params,
-      } satisfies JsonRpcCall)
+      const finish = (error: unknown, value?: unknown) => {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        if (error) reject(error); else resolve(value)
+      }
+      const timer = setTimeout(() => finish(new Error(`codex RPC timed out: ${method}; delivery may be uncertain`)), method === 'initialize' ? 30_000 : 120_000)
+      timer.unref()
+      this.pending.set(id, { resolve: value => finish(null, value), reject: error => finish(error || new Error('RPC failed')) })
+      try { this.sendLine({ jsonrpc: '2.0', id, method, params } satisfies JsonRpcCall) }
+      catch (error) { finish(error) }
     })
   }
 
@@ -6368,7 +6213,7 @@ class AppServerProcess {
         const result = await this.call(method, params)
         return method === 'thread/read' && threadId ? this.desktopBridge.mergeRead(threadId, result) : result
       } catch (error) {
-        if (method === 'thread/resume' && threadId && /already has an active writer/iu.test(String(error)) && await this.desktopBridge.attach(threadId)) {
+        if (threadId && (method === 'thread/read' || method === 'thread/resume' && /already has an active writer/iu.test(String(error))) && await this.desktopBridge.attach(threadId)) {
           return this.desktopBridge.snapshot(threadId)
         }
         // An idle session may have been unloaded after its last turn. This
@@ -6447,6 +6292,8 @@ class AppServerProcess {
     return [...this.pendingServerRequests.values(), ...this.desktopBridge.listPending()]
   }
 
+  observeDesktopThread(threadId: string): Promise<boolean> { return this.desktopBridge.attach(threadId) }
+
   async hasActiveWork(): Promise<boolean> {
     if (this.desktopBridge.hasActiveWork() || this.listPendingServerRequests().length) return true
     if (!this.process) return false
@@ -6460,6 +6307,12 @@ class AppServerProcess {
 
   dispose(): void {
     this.desktopBridge.reset()
+    this.streamEventsByThreadId.clear()
+    this.lastThreadReadSnapshotByThreadId.clear()
+    this.threadTurnPageReadCacheByThreadId.clear()
+    this.threadTurnPageReadPromiseByThreadId.clear()
+    this.capturedItemsByThreadId.clear()
+    this.liveStateCache.clear()
     if (!this.process) return
 
     const proc = this.process
@@ -6933,7 +6786,7 @@ function getSharedBridgeState(): SharedBridgeState {
       const flags = asRecord(params?.status)?.activeFlags
       control.activity(threadId, status === 'active' ? Array.isArray(flags) && flags.includes('waitingOnApproval') ? 'approval' : 'running' : status === 'idle' || status === 'systemError' ? 'idle' : 'unknown', readNonEmptyString(params?.turnId))
     }
-    if (notification.method === 'web/thread/desktopDisconnected') { control.executionSource(threadId, 'web'); control.activity(threadId, 'unknown') }
+    if (notification.method === 'web/thread/desktopDisconnected') { control.executionSource(threadId, 'desktop'); control.activity(threadId, 'unknown') }
     if (notification.method === 'web/thread/desktopDetached') { control.executionSource(threadId, 'web'); control.activity(threadId, 'idle') }
   })
   const backendQueueProcessor = new BackendQueueProcessor(appServer, control)
@@ -7028,23 +6881,12 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, extensions, terminalManager, methodCatalog, backendQueueProcessor, control } = getSharedBridgeState()
-  let threadSearchIndex: ThreadSearchIndex | null = null
-  let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
-
-  async function getThreadSearchIndex(): Promise<ThreadSearchIndex> {
-    if (threadSearchIndex) return threadSearchIndex
-    if (!threadSearchIndexPromise) {
-      threadSearchIndexPromise = buildThreadSearchIndex(appServer)
-        .then((index) => {
-          threadSearchIndex = index
-          return index
-        })
-        .finally(() => {
-          threadSearchIndexPromise = null
-        })
-    }
-    return threadSearchIndexPromise
-  }
+  const searchIndex = new ExpiringSnapshot(() => buildThreadSearchIndex(appServer), 30_000)
+  const invalidateSearch = () => searchIndex.invalidate()
+  const unsubscribeSearch = appServer.onNotification(event => {
+    if (/^(thread\/|turn\/completed|item\/completed)/u.test(event.method)) invalidateSearch()
+  })
+  const getThreadSearchIndex = () => searchIndex.get()
   function scopeFor(req: IncomingMessage): string {
     const cookie = req.headers.cookie ?? ''
     const session = cookie.match(/(?:^|;\s*)(?:portal_session|CF_Authorization)=([^;]+)/)?.[1] ?? 'local'
@@ -7057,7 +6899,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     try { return JSON.parse(String(req.headers['x-codex-control'] ?? 'null')) as ControlProof | null } catch { return null }
   }
   function checkOrigin(req: IncomingMessage) {
-    if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) throw new ControlError('control_invalid', '请求来源不匹配。')
+    if (!isRequestOriginAllowed(req)) throw new ControlError('control_invalid', '请求来源不匹配。')
   }
   async function stopAndWait(threadId: string, client: ControlClient) {
     const state = control.status(threadId, client)
@@ -7094,6 +6936,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     const rpcControlSnapshot = () => {
       try { return rpcThreadId ? control.status(rpcThreadId, clientFor(req)) : undefined } catch { return undefined }
     }
+    res.once('finish', () => {
+      const changesSearch = requestPath === '/codex-api/rpc'
+        ? /^(?:thread\/(?:start|fork|name\/set|archive|unarchive|rollback)|turn\/start)$/u.test(rpcMethod || '')
+        : ['/codex-api/project-import', '/codex-api/thread-titles'].includes(requestPath) && !['GET', 'HEAD'].includes(requestMethod)
+      if (changesSearch && res.statusCode < 400) invalidateSearch()
+      if (rpcMethod === 'skills/config/write' && res.statusCode < 400) invalidateInstalledSkillsCache(appServer)
+    })
     const originalWrite = res.write.bind(res)
     const originalEnd = res.end.bind(res)
     res.write = ((chunk: unknown, encoding?: unknown, cb?: unknown) => {
@@ -7157,6 +7006,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/health') { setJson(res, 200, { ok: true }); return }
+
       if (await handleSkillsRoutes(req, res, url, { appServer, readJsonBody })) {
         return
       }
@@ -7179,7 +7030,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         try {
           setJson(res, 200, { commands: await listTerminalQuickCommands(cwd) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to load terminal quick commands') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to load terminal quick commands') })
         }
         return
       }
@@ -7298,7 +7149,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         const body = req.method === 'POST' ? asRecord(await readJsonBody(req)) : null
         const threadId = readNonEmptyString(body?.threadId) || url.searchParams.get('threadId') || ''
-        if (req.method === 'GET' && route === 'state') { setJson(res, 200, { data: control.status(threadId, client) }); return }
+        if (req.method === 'GET' && route === 'state') {
+          await appServer.observeDesktopThread(threadId)
+          setJson(res, 200, { data: control.status(threadId, client) }); return
+        }
         if (req.method === 'POST' && route === 'claim') {
           const data = await control.claim(threadId, client, readNonEmptyString(body?.epoch), Number(body?.version), body?.takeover === true,
             body?.stop === true ? () => stopAndWait(threadId, client) : undefined)
@@ -7359,14 +7213,27 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const mutates = method.startsWith('turn/') || (method.startsWith('thread/') && !['thread/read', 'thread/list', 'thread/loaded/list', 'thread/goal/get'].includes(method)) || method === 'codexui/thread/release'
           const run = async () => {
             try {
-              const result = await callRpcWithArchiveRecovery(appServer, method, body.params ?? null)
+              if (method === 'thread/start' && typeof params?.projectId === 'string' && params.projectId) {
+                const metadata = await readWorkspaceRootsState()
+                const local = metadata.localProjects?.find(project => project.id === params.projectId)
+                if (!local) throw new Error('项目不存在，请刷新项目列表。')
+                params.projectId = await resolveNativeProject(appServer, local)
+              }
+              let result = await callRpcWithArchiveRecovery(appServer, method, body.params ?? null)
+              if (method === 'thread/list' && !params?.cursor && !params?.archived && !(Array.isArray(params?.modelProviders) && params.modelProviders.length) && Object.keys(params ?? {}).every(key => ['cursor', 'archived', 'limit', 'sortKey', 'modelProviders'].includes(key))) {
+                result = await includeForkedThreads(getCodexHomeDir(), appServer, result)
+              }
               if (method === 'skills/config/write') extensions.invalidate()
               const thread = asRecord(asRecord(result)?.thread)
               const turn = asRecord(asRecord(result)?.turn)
               if (threadId && method === 'turn/start') control.activity(threadId, ['completed', 'failed', 'interrupted'].includes(readNonEmptyString(turn?.status)) ? 'idle' : 'running', readNonEmptyString(turn?.id))
               if (threadId && method === 'thread/resume') control.activity(threadId, asRecord(result)?.webReadOnlyReason === 'thread_writer_conflict' ? 'external' : ['active', 'inProgress', 'running'].includes(readNonEmptyString(asRecord(thread?.status)?.type)) ? 'running' : 'idle')
               if (threadId && method === 'thread/resume') control.executionSource(threadId, asRecord(result)?.webExecutionSource === 'desktop' ? 'desktop' : 'web')
-              if (method === 'thread/fork' && thread?.id && typeof thread.id === 'string') { await control.claim(thread.id, clientFor(req), control.epoch, 0, false); control.activity(thread.id, 'idle') }
+              if (method === 'thread/fork' && thread?.id && typeof thread.id === 'string') {
+                await rememberForkedThread(getCodexHomeDir(), thread.id)
+                await control.claim(thread.id, clientFor(req), control.epoch, 0, false); control.activity(thread.id, 'idle')
+              }
+              if (threadId && (method === 'thread/archive' || method === 'thread/delete')) await forgetForkedThread(getCodexHomeDir(), threadId)
               return result
             } catch (error) {
               if (threadId && /already has an active writer/iu.test(String(error))) control.activity(threadId, 'external')
@@ -7501,7 +7368,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             hasMoreOlder: startIndex > 0,
           })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to load earlier thread messages') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to load earlier thread messages') })
         }
         return
       }
@@ -7723,7 +7590,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const result = await revertTurnFileChanges(cwd, turnInfos, patchIds)
           setJson(res, 200, { ...result, changed: result.reverted, message: `Reverted ${result.reverted} file change(s)` })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to revert file changes') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to revert file changes') })
         }
         return
       }
@@ -7735,7 +7602,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const rawBody = await readRawBody(req)
+        const rawBody = await readRequestBody(req, 32 * 1024 * 1024)
         const incomingCt = req.headers['content-type'] ?? 'application/octet-stream'
         const upstream = await proxyTranscribe(rawBody, incomingCt, auth.accessToken, auth.accountId)
 
@@ -7758,7 +7625,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           res.setHeader('Cache-Control', 'private, max-age=3600')
           res.end(logo.body)
         } catch (error) {
-          setJson(res, 502, { error: getErrorMessage(error, 'Failed to fetch connector logo') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 502, { error: getErrorMessage(error, 'Failed to fetch connector logo') })
         }
         return
       }
@@ -7861,7 +7728,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/workspace-roots-state') {
         res.setHeader('Cache-Control', 'no-store')
-        const state = await readWorkspaceRootsState()
+        const state = await readWorkspaceRootsState(appServer)
         setJson(res, 200, { data: state })
         return
       }
@@ -7957,7 +7824,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             },
           })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to create worktree') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to create worktree') })
         }
         return
       }
@@ -8032,7 +7899,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             },
           })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to create worktree') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to create worktree') })
         }
         return
       }
@@ -8092,7 +7959,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             })
           setJson(res, 200, { data: branches })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to list branches') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to list branches') })
         }
         return
       }
@@ -8173,7 +8040,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             },
           })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to read Git branches') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to read Git branches') })
         }
         return
       }
@@ -8206,7 +8073,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           })
         } catch (error) {
           if (!isNotGitRepositoryError(error)) {
-            setJson(res, 500, { error: getErrorMessage(error, 'Failed to read Git repository status') })
+            setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to read Git repository status') })
             return
           }
           setJson(res, 200, {
@@ -8254,7 +8121,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           await checkoutGitBranchWithWorktreeRecovery(gitRoot, targetBranch)
           setJson(res, 200, { data: await readGitHeaderState(gitRoot) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to switch branch') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to switch branch') })
         }
         return
       }
@@ -8303,7 +8170,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           })
           setJson(res, 200, { data: commits })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to load branch commits') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to load branch commits') })
         }
         return
       }
@@ -8391,7 +8258,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           setJson(res, 200, { data: files })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to load commit files') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to load commit files') })
         }
         return
       }
@@ -8438,7 +8305,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           })
           setJson(res, 200, { data: await readGitHeaderState(gitRoot) })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to reset branch to commit') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to reset branch to commit') })
         }
         return
       }
@@ -8476,12 +8343,16 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             const path = getCodexGlobalStatePath()
             const snapshot = await readFile(path, 'utf8')
             const next = applyThreadProjectMutation(asRecord(JSON.parse(snapshot)) ?? {}, { threadId: mutation.threadId as string, projectId: mutation.projectId as string | null })
-            await writeWorkspaceStateSnapshot(path, snapshot, next)
+            const local = readDesktopProjectMetadata(next).localProjects?.find(project => project.id === mutation.projectId)
+            const nativeId = local ? await resolveNativeProject(appServer, local) : null
+            await saveNativeThreadProject(appServer, mutation.threadId as string, nativeId)
+            // Desktop keeps this JSON file in memory and overwrites external edits.
+            // Only commit through native RPC; do not race the desktop's state writer.
           }))
         } catch (error) {
           setJson(res, 409, { error: error instanceof Error ? error.message : 'Failed to assign thread project' }); return
         }
-        setJson(res, 200, { ok: true })
+        setJson(res, 200, { ok: true, warning: '项目归属已写入 Codex 原生数据库，但当前桌面客户端的即时显示尚不能确认。请在客户端核对；本次不会改写桌面缓存文件。' })
         return
       }
 
@@ -8560,7 +8431,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           res.end()
         } catch (error) {
           if (!res.headersSent) {
-            setJson(res, 500, { error: getErrorMessage(error, 'Failed to export project') })
+            setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to export project') })
           } else {
             res.destroy(error instanceof Error ? error : new Error('Failed to export project'))
           }
@@ -8587,7 +8458,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         try {
-          const buffer = await readRawBody(req)
+          const buffer = await readRequestBody(req, 64 * 1024 * 1024)
           if (buffer.length === 0) {
             setJson(res, 400, { error: 'Missing project ZIP' })
             return
@@ -8595,7 +8466,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const result = await importProjectZip(buffer, parent)
           setJson(res, 200, { data: { path: result.projectPath, importedSessions: result.importedSessions } })
         } catch (error) {
-          setJson(res, 400, { error: getErrorMessage(error, 'Failed to import project') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 400, { error: getErrorMessage(error, 'Failed to import project') })
         }
         return
       }
@@ -8750,7 +8621,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             .map((row) => ({ path: row.path }))
           setJson(res, 200, { data: scored })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to search files') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to search files') })
         }
         return
       }
@@ -8772,7 +8643,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const prompt = await createComposerPromptFile(name, content)
           setJson(res, 200, { data: prompt })
         } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to create prompt') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to create prompt') })
         }
         return
       }
@@ -8787,7 +8658,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const removed = await removeComposerPromptFile(promptPath)
           setJson(res, 200, { data: { removed } })
         } catch (error) {
-          setJson(res, 400, { error: getErrorMessage(error, 'Failed to remove prompt') })
+          setJson(res, error instanceof HttpError ? error.statusCode : 400, { error: getErrorMessage(error, 'Failed to remove prompt') })
         }
         return
       }
@@ -8880,9 +8751,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         checkOrigin(req)
         await control.mutate(id, clientFor(req), proofFor(req), async () => {
-          const cache = await readThreadTitleCache()
-          const next = title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id)
-          await writeThreadTitleCache(next)
+          await writeThreadTitleCache(cache => title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id))
         })
         setJson(res, 200, { ok: true })
         return
@@ -9030,7 +8899,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       next()
     } catch (error) {
       const message = getErrorMessage(error, 'Unknown bridge error')
-      if (rpcMethod) {
+      if (error instanceof HttpError) {
+        setJson(res, error.statusCode, { error: message })
+      } else if (rpcMethod) {
         // RPC rejection is a valid application response. HTTP 502 lets an edge
         // proxy replace our actionable error with its generic HTML gateway page.
         const code = error instanceof ControlError ? error.code : /already has an active writer/iu.test(message) ? 'thread_writer_conflict' : 'rpc_error'
@@ -9046,7 +8917,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   middleware.dispose = () => {
-    threadSearchIndex = null
+    searchIndex.invalidate()
+    unsubscribeSearch()
+    disposeSkillTranslations()
     terminalManager.dispose()
     backendQueueProcessor.dispose()
     appServer.dispose()

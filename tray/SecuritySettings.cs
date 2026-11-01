@@ -147,7 +147,8 @@ namespace CodexWebTray {
     internal static class SecurityDialogs {
         internal static Form Window(string title, int height) {
             var form = new Form { Text=title, ClientSize=new Size(530,height), Font=new Font("Microsoft YaHei UI",10), StartPosition=FormStartPosition.CenterParent,
-                FormBorderStyle=FormBorderStyle.FixedDialog, MaximizeBox=false, MinimizeBox=false, AutoScaleMode=AutoScaleMode.None };
+                FormBorderStyle=FormBorderStyle.FixedDialog, MaximizeBox=false, MinimizeBox=false, AutoScaleMode=AutoScaleMode.None,
+                BackColor=SystemColors.Control, ForeColor=SystemColors.ControlText };
             // Build all controls at 96-DPI geometry before scaling once. Setting
             // AutoScaleDimensions during dynamic construction skipped this pass.
             form.Load += (s,e) => {
@@ -167,50 +168,52 @@ namespace CodexWebTray {
             form.Location=new Point(Math.Max(area.Left,Math.Min(form.Left,area.Right-form.Width)),Math.Max(area.Top,Math.Min(form.Top,area.Bottom-form.Height)));
         }
         static Label Label(Form f,string text,int y,int height=30) { var c=new Label { Text=text,Location=new Point(22,y),Size=new Size(486,height) }; f.Controls.Add(c);return c; }
-        static TextBox Input(Form f,int y,bool secret=false,int height=30) {var t=new TextBox {Location=new Point(22,y),Size=new Size(486,height),UseSystemPasswordChar=secret};f.Controls.Add(t);return t;}
+        static TextBox Input(Form f,int y,bool secret=false,int height=30) {var t=new TextBox {Location=new Point(22,y),Size=new Size(486,height),UseSystemPasswordChar=secret,BackColor=SystemColors.Window,ForeColor=SystemColors.WindowText};f.Controls.Add(t);return t;}
         static Button Button(Form f,string text,int x,int y,int width=148) { var b=new Button {Text=text,Location=new Point(x,y),Size=new Size(width,36)};f.Controls.Add(b);return b; }
         internal static void Password(IWin32Window owner, Action<string,bool> apply) { using(var f=PasswordWindow(apply)) f.ShowDialog(owner); }
-        internal static Form PasswordWindow(Action<string,bool> apply) {
-            var f=Window("网页登录密码",355); {
+        internal static Form PasswordWindow(Action<string,bool> apply, bool openCode=false) {
+            var f=Window(openCode?"OpenCode 服务器密码":"Codex 网页密码",355); {
                 Label(f,"密码保存在此 Windows 账户，重启后保持不变。",18);
-                Label(f,"新密码（8–20 个字符）",58); var first=Input(f,86,true);
+                Label(f,openCode?"新密码（8–128 个字符）":"新密码（8–20 个字符）",58); var first=Input(f,86,true);
                 Label(f,"再次输入",126);var second=Input(f,154,true);
-                var revoke=new CheckBox {Text="同时注销所有网页密码会话（推荐）",Checked=true,Location=new Point(22,200),Size=new Size(480,30)}; f.Controls.Add(revoke);
-                Label(f,"保存后会重启网页服务；桌面 Codex 不会关闭。",235);
+                var revoke=new CheckBox {Text=openCode?"所有 OpenCode 登录会话将失效":"同时注销所有网页密码会话（推荐）",Checked=true,Enabled=!openCode,Location=new Point(22,200),Size=new Size(480,30)}; f.Controls.Add(revoke);
+                Label(f,openCode?"保存会重启共享服务，可能中断任务，请先结束运行中的任务。":"保存后会重启网页服务；桌面 Codex 不会关闭。",235,44);
                 var save=Button(f,"保存密码",22,292);var cancel=Button(f,"取消",184,292);cancel.Click+=(s,e)=>f.Close();
-                save.Click+=(s,e)=> {try {Secrets.ValidatePassword(first.Text);if(first.Text!=second.Text)throw new ArgumentException("两次输入的密码不一致。");apply(first.Text,revoke.Checked);first.Clear();second.Clear();MessageBox.Show(f,"密码已保存。网页服务将使用新密码启动。","已保存");f.Close();}catch(Exception ex){MessageBox.Show(f,ex.Message,"未完成");}};
+                bool working=false; f.FormClosing+=(s,e)=>{if(working)e.Cancel=true;};
+                save.Click+=async(s,e)=> {try {if(openCode)OpenCodeService.ValidatePassword(first.Text);else Secrets.ValidatePassword(first.Text);if(first.Text!=second.Text)throw new ArgumentException("两次输入的密码不一致。");string value=first.Text;bool clear=revoke.Checked;working=true;save.Enabled=cancel.Enabled=false;await Task.Run(()=>apply(value,clear));first.Clear();second.Clear();working=false;MessageBox.Show(f,openCode?"密码已保存，OpenCode 服务已恢复。请使用新密码重新登录。":"密码已保存。网页服务将使用新密码启动。","已保存");f.Close();}catch(Exception ex){MessageBox.Show(f,ex.Message,"未完成");}finally{working=false;if(!f.IsDisposed)save.Enabled=cancel.Enabled=true;}};
                 return f;
             }
         }
         internal static void Site(IWin32Window owner) { using(var f=SiteWindow()) f.ShowDialog(owner); }
         internal static Form SiteWindow() {
-            var f=Window("Cloudflare 站点配置",430);
-            SiteConfiguration site;
-            try { site=CloudflareSite.Load(); } catch { site=new SiteConfiguration(); }
+            var f=Window("Cloudflare 共享站点配置",470);
             Label(f,"仅配置管理目标；不会创建隧道或修改云端权限。",16);
-            Label(f,"Account ID（账户 ID）",50); var account=Input(f,78); account.Text=site.AccountId??"";
-            Label(f,"Application ID（Access 应用 ID）",116); var app=Input(f,144); app.Text=site.ApplicationId??"";
-            Label(f,"Policy ID（此应用专用的 Allow 策略 ID）",182); var policy=Input(f,210); policy.Text=site.PolicyId??"";
-            Label(f,"域名（例如 codex.example.com，不含协议）",248); var host=Input(f,276); host.Text=site.Hostname??"";
-            var status=Label(f,"这些 ID 不是 API Token；Token 在 Access 登录中保存。",318,40);
-            var save=Button(f,"保存到本机",22,372,220);
+            Label(f,"Account ID（账户 ID）",50); var account=Input(f,78);
+            Label(f,"Application ID（两个域名共用的 Access 应用）",116); var app=Input(f,144);
+            Label(f,"Policy ID（此应用专用的 Allow 策略）",182); var policy=Input(f,210);
+            Label(f,"受保护域名（每行一个，不含协议）",248); var host=Input(f,276,false,58);host.Multiline=true;host.ScrollBars=ScrollBars.Vertical;
+            var status=Label(f,"正在读取本机站点配置…",346,52);
+            var save=Button(f,"保存到本机",22,416,220);var refresh=Button(f,"重新读取",264,416,244);
+            Action reload=()=>{try{var site=CloudflareSite.Load();account.Text=site.AccountId??"";app.Text=site.ApplicationId??"";policy.Text=site.PolicyId??"";host.Text=String.Join(Environment.NewLine,site.Domains());status.Text=site.Domains().Length==0?"尚未配置站点。请填写后保存。":"已读取本机配置；Access 登录可读取共享邮箱白名单。";save.Enabled=true;}catch(Exception ex){save.Enabled=false;status.Text="读取失败："+ex.Message;}};
+            reload(); f.Shown+=(s,e)=>reload(); refresh.Click+=(s,e)=>reload();
             save.Click+=(s,e)=>{try {
-                CloudflareSite.Save(new SiteConfiguration { AccountId=account.Text.Trim(),ApplicationId=app.Text.Trim(),PolicyId=policy.Text.Trim(),Hostname=host.Text.Trim() });
-                status.Text="已保存到本机。请重新打开 Access 登录窗口。";
+                var domains=host.Text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries).Select(x=>x.Trim()).ToArray();
+                CloudflareSite.Save(new SiteConfiguration { AccountId=account.Text.Trim(),ApplicationId=app.Text.Trim(),PolicyId=policy.Text.Trim(),Hostname=domains.FirstOrDefault(),Hostnames=domains });
+                reload();status.Text="已保存并重新读取。请重新打开 Access 登录窗口。";
             } catch(Exception ex) { status.Text=ex.Message; }};
             return f;
         }
         internal static void Access(IWin32Window owner) { using(var f=AccessWindow()) f.ShowDialog(owner); }
         internal static Form AccessWindow() {
-            var f=Window("Cloudflare Access · 当前站点",630); {
-                Label(f,"管理此站点的允许邮箱和策略登录有效期",16);
+            var f=Window("Cloudflare Access · 共享访问保护",630); {
+                Label(f,"统一管理 Codex / OpenCode 的允许邮箱和登录有效期",16);
                 Label(f,"API Token（仅需 Access: Apps and Policies 编辑权限）",48);
                 var token=Input(f,78,true);string loadError=null;
                 try { token.Text=Secrets.Read("cloudflare-token")??""; }
                 catch(Exception ex) { loadError="已保存的令牌读取失败（"+ex.GetType().Name+"），请检查当前 Windows 账户和存储权限。"; Paths.Log("Access token read failed: "+ex.GetType().Name); }
                 var remember=new CheckBox {Text="用 Windows 当前账户加密保存令牌",Checked=true,Location=new Point(22,114),Size=new Size(480,28)};f.Controls.Add(remember);
                 var read=Button(f,"连接并读取",22,148);var forget=Button(f,"清除本机令牌",184,148);var dashboard=Button(f,"打开控制台",346,148);
-                Label(f,"允许登录的邮箱（每行一个；所有人共享同一 Codex 环境）",202);
+                Label(f,"允许登录的邮箱（每行一个；同时允许通过两个域名的 Access）",202);
                 var emails=Input(f,236,false,145);emails.Multiline=true;emails.ScrollBars=ScrollBars.Vertical;emails.Enabled=false;
                 Label(f,"策略登录有效期（覆盖应用设置，主要作用于新会话）",392);
                 var duration=new ComboBox {Location=new Point(22,424),Size=new Size(220,30),DropDownStyle=ComboBoxStyle.DropDownList};duration.Items.AddRange(AccessClient.Durations);duration.SelectedItem="12h";duration.Enabled=false;f.Controls.Add(duration);
@@ -227,7 +230,7 @@ namespace CodexWebTray {
                 forget.Click+=(s,e)=>{Secrets.Forget("cloudflare-token");token.Clear();loaded=null;busy(false);status.Text="本机令牌已清除；云端令牌未撤销。";};
                 read.Click+=async(s,e)=>{busy(true);status.Text="正在读取云端…";try{string value=token.Text.Trim();var p=await Task.Run(()=>AccessClient.Load(value));loaded=p;loadedToken=value;emails.Text=String.Join(Environment.NewLine,AccessClient.Emails(p));var current=p.ContainsKey("session_duration")?p["session_duration"] as string:null;duration.SelectedItem=AccessClient.Durations.Contains(current)?current:"12h";if(remember.Checked)Secrets.Save("cloudflare-token",value);else Secrets.Forget("cloudflare-token");status.Text="已读取云端。未修改任何访问权限。当前策略时长："+(String.IsNullOrEmpty(current)?"继承应用设置":current);}catch(Exception ex){loaded=null;status.Text=ex.Message;}finally{busy(false);}};
                 save.Click+=async(s,e)=>{try{var wanted=AccessClient.ParseEmails(emails.Text);string time=(string)duration.SelectedItem;
-                    if(MessageBox.Show(f,"将更新 当前站点 的允许邮箱：\r\n"+String.Join("\r\n",wanted)+"\r\n登录有效期："+time+"\r\n\r\n新增用户可访问共享 Codex 环境。移除邮箱不会主动撤销现有会话。确认保存？","确认访问权限",MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+                    if(MessageBox.Show(f,"将更新共享应用的允许邮箱：\r\n"+String.Join("\r\n",wanted)+"\r\n登录有效期："+time+"\r\n\r\n此操作同时影响 Codex 和 OpenCode 的 Access 保护。移除邮箱不会主动撤销现有会话。确认保存？","确认访问权限",MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
                     busy(true);status.Text="正在保存并核对…";await Task.Run(()=>AccessClient.Save(loadedToken,loaded,wanted,time));loaded=await Task.Run(()=>AccessClient.Load(loadedToken));status.Text="已保存并重新读取验证。现有会话需在控制台撤销。";
                 }catch(Exception ex){loaded=null;status.Text=ex.Message;}finally{busy(false);}};
                 f.Shown+=(s,e)=>{if(!String.IsNullOrWhiteSpace(token.Text))read.PerformClick();};

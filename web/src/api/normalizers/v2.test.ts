@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeThreadMessagesV2, readThreadInProgressFromResponse } from './v2'
+import { normalizeThreadMessagesV2, normalizeThreadSummaryV2, readThreadInProgressFromResponse } from './v2'
 import type { ThreadReadResponse } from '../appServerDtos'
 
 function threadReadResponseWithContent(content: ThreadReadResponse['thread']['turns'][number]['items'][number][]): ThreadReadResponse {
@@ -43,6 +43,15 @@ function threadReadResponseWithContent(content: ThreadReadResponse['thread']['tu
     },
   }
 }
+
+it('preserves native project membership, including an explicit projectless chat', () => {
+  const payload = threadReadResponseWithContent([])
+  expect(normalizeThreadSummaryV2(payload).projectId).toBeUndefined()
+  Object.assign(payload.thread, { projectId: 'native-project' })
+  expect(normalizeThreadSummaryV2(payload).projectId).toBe('native-project')
+  Object.assign(payload.thread, { projectId: null })
+  expect(normalizeThreadSummaryV2(payload).projectId).toBeNull()
+})
 
 describe('normalizeThreadMessagesV2', () => {
   function normalizeUser(text: string, images: string[] = []) {

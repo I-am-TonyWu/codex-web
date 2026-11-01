@@ -56,11 +56,11 @@
             @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
           >
             <span class="sidebar-skills-link-icon" aria-hidden="true">
-              <IconTablerBolt />
+              <IconTablerPuzzle />
             </span>
             <span class="sidebar-skills-link-copy">
               <span class="sidebar-skills-link-title">{{ t('Skills') }}</span>
-              <span class="sidebar-skills-link-subtitle">{{ t('Plugins, apps, MCPs') }}</span>
+
             </span>
           </button>
 
@@ -72,11 +72,11 @@
             @click="router.push({ name: 'automations' }); isMobile && setSidebarCollapsed(true)"
           >
             <span class="sidebar-skills-link-icon sidebar-automations-link-icon" aria-hidden="true">
-              <IconTablerBolt />
+              <IconTablerClock />
             </span>
             <span class="sidebar-skills-link-copy">
               <span class="sidebar-skills-link-title">{{ t('Automations') }}</span>
-              <span class="sidebar-skills-link-subtitle">{{ t('Scheduled work') }}</span>
+
             </span>
           </button>
 
@@ -102,10 +102,61 @@
             @remove-project="onRemoveProject" @reorder-project="onReorderProject"
             @copy-thread-chat="onCopyThreadChat"
             @automations-changed="onAutomationsChanged"
-            @thread-project-changed="refreshWorkspaceProjects"
+            @thread-project-changed="refreshWorkspaceProjects(true)"
             @thread-menu-change="openThreadMenuId = $event"
             @import-project="onChooseProjectImportZip"
-            @start-new-chat="onStartProjectlessNewChat" />
+            @start-new-chat="onStartProjectlessNewChat">
+            <template #header-actions="{ close }">
+              <button v-if="selectedThread?.cwd" class="header-menu-files" type="button" @click="onBrowseThreadFiles(selectedThreadId); close()">{{ t('View / download project files') }}</button>
+
+            <ComposerDropdown
+              v-if="canShowTerminalToggle"
+              class="content-header-terminal-command"
+              :class="{ 'is-open': isComposerTerminalOpen }"
+              :model-value="terminalHeaderDropdownValue"
+              :options="terminalHeaderDropdownOptions"
+              :placeholder="terminalCommandPlaceholder"
+              :selected-prefix-icon="IconTablerTerminal"
+              :icon-only="false"
+              menu-align="end"
+              :empty-label="t('No commands')"
+              @update:model-value="onSelectHeaderTerminalCommand"
+            />
+            <div v-if="canShowContentHeaderBranchDropdown" class="header-menu-git-row">
+            <span>{{ t('Git branch') }}</span>
+            <HeaderGitBranchDropdown
+              v-if="canShowContentHeaderBranchDropdown"
+              class="content-header-branch-dropdown"
+              :current-branch="currentThreadBranch"
+              :head-sha="currentThreadHeadSha"
+              :head-subject="currentThreadHeadSubject"
+              :head-date="currentThreadHeadDate"
+              :detached="isThreadDetachedHead"
+              :dirty="isThreadWorktreeDirty"
+              :worktree-change-summary="threadWorktreeChangeSummary"
+              :branches="threadBranchOptions"
+              :commits-by-branch="threadBranchCommitsByBranch"
+              :commits-loading-for="threadBranchCommitsLoadingFor"
+              :commits-error="threadBranchCommitsError"
+              :commit-files-by-sha="threadCommitFilesBySha"
+              :commit-files-loading-for="threadCommitFilesLoadingFor"
+              :commit-files-error="threadCommitFilesError"
+              :loading="isLoadingThreadBranches"
+              :busy="isSwitchingThreadBranch"
+              :error="threadBranchError"
+              :review-open="isReviewPaneOpen"
+              :show-review="route.name === 'thread' && selectedThreadId.length > 0"
+              @toggle-review="onToggleContentHeaderReview"
+              @checkout-branch="onCheckoutContentHeaderBranch"
+              @reset-branch-to-commit="onResetContentHeaderBranchToCommit"
+              @load-commits="loadThreadBranchCommits"
+              @load-commit-files="loadThreadCommitFiles"
+              @open-commit-file="onOpenContentHeaderCommitFile"
+            />
+            </div>
+
+            </template>
+          </SidebarThreadTree>
         </div>
 
         <div
@@ -125,6 +176,18 @@
                 <p class="sidebar-settings-quota-title">{{ t('Codex usage') }}</p>
                 <RateLimitStatus :snapshots="accountRateLimitSnapshots" />
                 <p v-if="accountRateLimitSnapshots.length === 0" class="sidebar-settings-quota-empty">{{ t('Quota temporarily unavailable') }}</p>
+              </div>
+              <div
+                v-if="showThreadContextBadge"
+                class="sidebar-settings-row sidebar-settings-context-row"
+                :data-state="threadContextBadgeState"
+                :title="threadContextTooltip"
+              >
+                <span class="sidebar-settings-label">{{ t('Context') }}</span>
+                <span class="sidebar-settings-context-value" :data-state="threadContextBadgeState">
+                  {{ threadContextPrimaryText }}
+                  <span class="sidebar-settings-context-meta">{{ threadContextSecondaryText }}</span>
+                </span>
               </div>
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.sendWithEnter" @click="toggleSendWithEnter">
                 <span class="sidebar-settings-label">{{ t('Require Ctrl + Enter to send') }}</span>
@@ -172,7 +235,7 @@
               <a
                 v-if="hasVisibleFeedbackError"
                 class="sidebar-settings-row sidebar-settings-feedback-row"
-                :href="feedbackMailto"
+                :href="feedbackUrl" target="_blank" rel="noopener noreferrer"
                 @click="prepareFeedbackLink"
               >
                 <span class="sidebar-settings-label">{{ t('Send feedback') }}</span>
@@ -192,21 +255,9 @@
                   @update:model-value="onDictationLanguageChange"
                 />
               </div>
-              <div
-                v-if="showThreadContextBadge"
-                class="sidebar-settings-row sidebar-settings-context-row"
-                :data-state="threadContextBadgeState"
-                :title="threadContextTooltip"
-              >
-                <span class="sidebar-settings-label">{{ t('Context') }}</span>
-                <span class="sidebar-settings-context-value" :data-state="threadContextBadgeState">
-                  {{ threadContextPrimaryText }}
-                  <span class="sidebar-settings-context-meta">{{ threadContextSecondaryText }}</span>
-                </span>
-              </div>
-              <div class="sidebar-settings-build-label" :aria-label="t('Worktree name and version')">
-                WT {{ worktreeName }} · v{{ appVersion }}
-              </div>
+              <a class="sidebar-settings-repository" :href="CODEX_WEB_REPOSITORY" target="_blank" rel="noopener noreferrer" :title="`codex-web · v${appVersion}`">
+                <IconTablerBrandGithub /><span>codex-web</span><span aria-hidden="true">↗</span>
+              </a>
             </div>
           </Transition>
           <button
@@ -217,9 +268,7 @@
           >
             <IconTablerSettings class="sidebar-settings-icon" />
             <span>{{ t('Settings') }}</span>
-            <span class="sidebar-settings-button-version">
-              {{ worktreeName }} · v{{ appVersion }}
-            </span>
+            <RateLimitStatus class="sidebar-settings-button-quota" :snapshots="accountRateLimitSnapshots" compact />
           </button>
         </div>
       </section>
@@ -246,10 +295,10 @@
               @start-new-thread="onStartNewThreadFromToolbar"
             />
             <span v-if="isSkillsRoute" class="skills-route-header-icon" aria-hidden="true">
-              <IconTablerBolt />
+              <IconTablerPuzzle />
             </span>
             <span v-else-if="isAutomationsRoute" class="skills-route-header-icon automations-route-header-icon" aria-hidden="true">
-              <IconTablerBolt />
+              <IconTablerClock />
             </span>
           </template>
           <template #title-actions>
@@ -260,50 +309,7 @@
               <IconTablerDots />
             </button>
           </template>
-          <template #actions>
-            <ComposerDropdown
-              v-if="canShowTerminalToggle"
-              class="content-header-terminal-command"
-              :class="{ 'is-open': isComposerTerminalOpen }"
-              :model-value="terminalHeaderDropdownValue"
-              :options="terminalHeaderDropdownOptions"
-              :placeholder="terminalCommandPlaceholder"
-              :selected-prefix-icon="IconTablerTerminal"
-              :icon-only="true"
-              menu-align="end"
-              :empty-label="t('No commands')"
-              @update:model-value="onSelectHeaderTerminalCommand"
-            />
-            <HeaderGitBranchDropdown
-              v-if="canShowContentHeaderBranchDropdown"
-              class="content-header-branch-dropdown"
-              :current-branch="currentThreadBranch"
-              :head-sha="currentThreadHeadSha"
-              :head-subject="currentThreadHeadSubject"
-              :head-date="currentThreadHeadDate"
-              :detached="isThreadDetachedHead"
-              :dirty="isThreadWorktreeDirty"
-              :worktree-change-summary="threadWorktreeChangeSummary"
-              :branches="threadBranchOptions"
-              :commits-by-branch="threadBranchCommitsByBranch"
-              :commits-loading-for="threadBranchCommitsLoadingFor"
-              :commits-error="threadBranchCommitsError"
-              :commit-files-by-sha="threadCommitFilesBySha"
-              :commit-files-loading-for="threadCommitFilesLoadingFor"
-              :commit-files-error="threadCommitFilesError"
-              :loading="isLoadingThreadBranches"
-              :busy="isSwitchingThreadBranch"
-              :error="threadBranchError"
-              :review-open="isReviewPaneOpen"
-              :show-review="route.name === 'thread' && selectedThreadId.length > 0"
-              @toggle-review="onToggleContentHeaderReview"
-              @checkout-branch="onCheckoutContentHeaderBranch"
-              @reset-branch-to-commit="onResetContentHeaderBranchToCommit"
-              @load-commits="loadThreadBranchCommits"
-              @load-commit-files="loadThreadCommitFiles"
-              @open-commit-file="onOpenContentHeaderCommitFile"
-            />
-          </template>
+
         </ContentHeader>
 
         <section class="content-body">
@@ -462,7 +468,7 @@
                         </div>
                         <div v-if="createFolderError" class="new-thread-open-folder-error visible-error-with-feedback">
                           <span>{{ createFolderError }}</span>
-                          <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, createFolderError)">{{ t('Send feedback') }}</a>
+                          <a class="visible-error-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareFeedbackLink($event, createFolderError)">{{ t('Send feedback') }}</a>
                         </div>
                       </div>
                       <input
@@ -476,7 +482,7 @@
                       <div v-if="existingFolderError" class="new-thread-open-folder-error-actions">
                         <div class="new-thread-open-folder-error visible-error-with-feedback">
                           <span>{{ existingFolderError }}</span>
-                          <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, existingFolderError)">{{ t('Send feedback') }}</a>
+                          <a class="visible-error-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareFeedbackLink($event, existingFolderError)">{{ t('Send feedback') }}</a>
                         </div>
                         <button
                           class="new-thread-folder-action"
@@ -585,7 +591,7 @@
                       </label>
                       <div v-if="projectSetupError" class="new-thread-open-folder-error visible-error-with-feedback">
                         <span>{{ projectSetupError }}</span>
-                        <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, projectSetupError)">{{ t('Send feedback') }}</a>
+                        <a class="visible-error-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareFeedbackLink($event, projectSetupError)">{{ t('Send feedback') }}</a>
                       </div>
                       <div class="new-thread-project-modal-actions">
                         <button class="new-thread-folder-action" type="button" :disabled="isProjectSetupSubmitting" @click="onCloseProjectSetupModal">
@@ -649,7 +655,7 @@
               <div class="composer-with-queue">
                 <div v-if="codexCliMissingError" class="composer-runtime-error" role="alert">
                   <span>{{ t(codexCliMissingError) }}</span>
-                  <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, codexCliMissingError)">{{ t('Send feedback') }}</a>
+                  <a class="visible-error-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareFeedbackLink($event, codexCliMissingError)">{{ t('Send feedback') }}</a>
                 </div>
                 <ThreadTerminalPanel
                   v-if="homeTerminalOpen && composerCwd"
@@ -725,7 +731,7 @@
                 <div class="composer-with-queue">
                   <div v-if="codexCliMissingError" class="composer-runtime-error" role="alert">
                     <span>{{ t(codexCliMissingError) }}</span>
-                    <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, codexCliMissingError)">{{ t('Send feedback') }}</a>
+                    <a class="visible-error-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareFeedbackLink($event, codexCliMissingError)">{{ t('Send feedback') }}</a>
                   </div>
                   <QueuedMessages
                     :messages="selectedThreadQueuedMessages"
@@ -862,14 +868,16 @@ import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
-import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
+
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import RateLimitStatus from './components/content/RateLimitStatus.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
-import HeaderGitBranchDropdown from './components/content/HeaderGitBranchDropdown.vue'
-import ComposerRuntimeDropdown from './components/content/ComposerRuntimeDropdown.vue'
+
+
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
-import IconTablerBolt from './components/icons/IconTablerBolt.vue'
+import IconTablerPuzzle from './components/icons/IconTablerPuzzle.vue'
+import IconTablerClock from './components/icons/IconTablerClock.vue'
+import IconTablerBrandGithub from './components/icons/IconTablerBrandGithub.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerTarget from './components/icons/IconTablerTarget.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
@@ -880,7 +888,7 @@ import { useMobile } from './composables/useMobile'
 import { useUiLanguage } from './composables/useUiLanguage'
 import { useUiFontSize } from './composables/useUiFontSize'
 import IconTablerDots from './components/icons/IconTablerDots.vue'
-import { useFeedbackDiagnostics } from './composables/useFeedbackDiagnostics'
+import { CODEX_WEB_REPOSITORY, useFeedbackDiagnostics } from './composables/useFeedbackDiagnostics'
 import {
   clearThreadGoal,
   checkoutGitBranch,
@@ -918,6 +926,9 @@ import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, ThreadG
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
 
+const ThreadPendingRequestPanel = defineAsyncComponent(() => import('./components/content/ThreadPendingRequestPanel.vue'))
+const HeaderGitBranchDropdown = defineAsyncComponent(() => import('./components/content/HeaderGitBranchDropdown.vue'))
+const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
 const ThreadTerminalPanel = defineAsyncComponent(() => import('./components/content/ThreadTerminalPanel.vue'))
 const ReviewPane = defineAsyncComponent(() => import('./components/content/ReviewPane.vue'))
@@ -930,7 +941,6 @@ const openThreadMenuId = ref('')
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const TERMINAL_QUICK_COMMAND_STORAGE_KEY = 'codex-web-local.terminal-quick-commands.v1'
 const TOGGLE_TERMINAL_COMMAND_VALUE = '__toggle_terminal__'
-const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const SETTINGS_HELP = {
   sendWithEnter: t('When enabled, use Ctrl+Enter to send and Enter for a new line. When disabled, use Enter to send and Shift+Enter for a new line.'),
@@ -1193,11 +1203,11 @@ function onHeaderThreadMenu(event: MouseEvent): void {
 }
 watch(selectedThreadId, () => { sidebarThreadTreeRef.value?.closeThreadMenu(); openThreadMenuId.value = '' })
 const {
-  buildFeedbackMailto,
-  feedbackMailtoBase,
+  buildFeedbackUrl,
+  feedbackBaseUrl,
   recordVisibleFailure,
 } = useFeedbackDiagnostics()
-const feedbackMailto = feedbackMailtoBase()
+const feedbackUrl = feedbackBaseUrl()
 
 function prepareFeedbackLink(event: MouseEvent, message?: string): void {
   if (message) {
@@ -1205,7 +1215,7 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
   }
   const target = event.currentTarget
   if (target instanceof HTMLAnchorElement) {
-    target.href = buildFeedbackMailto()
+    target.href = buildFeedbackUrl()
   }
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
@@ -1228,6 +1238,7 @@ const directoryTryInFlightKey = ref('')
 let hasPendingRouteSync = false
 const hasInitialized = ref(false)
 const newThreadCwd = ref('')
+const newThreadProjectId = ref<string | null>(null)
 const newThreadRuntime = ref<'local' | 'worktree'>('local')
 const gitRepoStatusByCwd = ref<Record<string, boolean>>({})
 const gitRepoStatusRequestByCwd = new Map<string, Promise<boolean>>()
@@ -1394,14 +1405,6 @@ const contentTitle = computed(() => {
   if (isSkillsRoute.value) return t('Skills')
   if (isHomeRoute.value) return t('Start new thread')
   return selectedThread.value?.title ?? t('Choose a thread')
-})
-const browserHostName =
-  typeof window !== 'undefined'
-    ? (window.location.hostname || window.location.host || 'codexui')
-    : 'codexui'
-const pageTitle = computed(() => {
-  const threadTitle = selectedThread.value?.title?.trim() ?? ''
-  return threadTitle || browserHostName
 })
 const filteredMessages = computed(() =>
   messages.value.filter((message) => {
@@ -2129,6 +2132,7 @@ function resolvePreferredLocalCwd(projectName: string, fallbackCwd = ''): string
 }
 
 function onStartNewThread(projectName: string): void {
+  newThreadProjectId.value = workspaceRootsState.value?.localProjects?.some(project => project.id === projectName) ? projectName : null
   const projectGroup = projectGroups.value.find((group) => group.projectName === projectName)
   const projectCwd = resolvePreferredLocalCwd(projectName, projectGroup?.threads[0]?.cwd?.trim() ?? '')
   if (projectCwd) {
@@ -2328,26 +2332,10 @@ async function onCreateProjectWorktree(projectName: string): Promise<void> {
   }
 }
 
-function resolveSelectedThreadProjectCwd(): string {
-  const thread = selectedThread.value
-  if (!thread) return ''
-  const projectName = thread.projectName?.trim() ?? ''
-  if (!projectName) return thread.cwd?.trim() ?? ''
-  return resolvePreferredLocalCwd(projectName, thread.cwd?.trim() ?? '')
-}
-
-function onStartNewThreadFromToolbar(): void {
-  const resolvedCwd = resolveSelectedThreadProjectCwd()
-  if (resolvedCwd) {
-    newThreadCwd.value = resolvedCwd
-  }
-  newThreadRuntime.value = 'local'
-  if (isMobile.value) setSidebarCollapsed(true)
-  if (isHomeRoute.value) return
-  void router.push({ name: 'home' })
-}
+function onStartNewThreadFromToolbar(): void { onStartProjectlessNewChat() }
 
 function onStartProjectlessNewChat(): void {
+  newThreadProjectId.value = null
   newThreadCwd.value = ''
   newThreadRuntime.value = 'local'
   if (isMobile.value) setSidebarCollapsed(true)
@@ -4027,14 +4015,7 @@ watch(
   { immediate: true },
 )
 
-watch(
-  pageTitle,
-  (value) => {
-    if (typeof document === 'undefined') return
-    document.title = value
-  },
-  { immediate: true },
-)
+if (typeof document !== 'undefined') document.title = 'codex-web'
 
 
 watch(isMobile, (mobile) => {
@@ -4076,7 +4057,7 @@ async function submitFirstMessageForNewThread(
       targetCwd = directory.cwd
       newThreadCwd.value = directory.cwd
     }
-    const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments)
+    const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments, newThreadProjectId.value)
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
     scheduleMobileConversationJumpToLatest()
@@ -4229,7 +4210,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-skills-link {
-  @apply mx-2 flex items-center gap-3 rounded-2xl border border-transparent bg-transparent px-3 py-2.5 text-left text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 cursor-pointer;
+  @apply mx-2 min-h-8 flex items-center gap-2 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-left text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 cursor-pointer;
 }
 
 .sidebar-skills-link.is-active {
@@ -4237,12 +4218,9 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-skills-link-icon {
-  @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white;
+  @apply flex h-5 w-5 shrink-0 items-center justify-center text-current;
 }
 
-.sidebar-automations-link-icon {
-  @apply bg-amber-500;
-}
 
 .sidebar-skills-link-icon :deep(svg) {
   @apply h-5 w-5;
@@ -4256,9 +4234,6 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   @apply truncate text-sm font-semibold leading-5 tracking-[-0.01em];
 }
 
-.sidebar-skills-link-subtitle {
-  @apply truncate text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600;
-}
 
 .sidebar-thread-controls-header-host {
   @apply ml-1;
@@ -4278,10 +4253,6 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 :global(:root.dark) .sidebar-skills-link-title {
   @apply text-zinc-50;
-}
-
-:global(:root.dark) .sidebar-skills-link-subtitle {
-  @apply text-zinc-400;
 }
 
 .content-body {
@@ -5406,8 +5377,14 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   @apply text-xs text-zinc-500;
 }
 
-.sidebar-settings-build-label {
-  @apply border-t border-zinc-100 px-3 py-2 text-[11px] text-zinc-500;
-}
-
+.header-menu-files { @apply rounded px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100; }
+.header-menu-git-row { @apply flex flex-col gap-1 border-b border-zinc-200 px-2 py-1.5 text-sm text-zinc-600; }
+.header-menu-git-row :deep(.header-git-menu-wrap) { position: fixed; top: 3.25rem; right: 0.75rem; }
+.header-menu-git-row :deep(.header-git-trigger) { width: 100%; justify-content: flex-start; }
+.sidebar-settings-button-quota { margin-left: auto; }
+.sidebar-settings-repository { @apply mt-2 flex items-center justify-center gap-2 rounded-md px-2 py-2 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900; }
+.sidebar-settings-repository svg { width: 1rem; height: 1rem; }
+:global(:root.dark .header-menu-files) { @apply text-zinc-200 hover:bg-zinc-800; }
+:global(:root.dark .header-menu-git-row) { @apply border-zinc-700 text-zinc-400; }
+:global(:root.dark .sidebar-settings-repository) { @apply text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100; }
 </style>

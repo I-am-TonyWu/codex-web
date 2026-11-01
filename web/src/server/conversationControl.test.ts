@@ -1,11 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConversationControl, ControlError } from './conversationControl'
 let dir: string
 let now: number
 let control: ConversationControl
+it('keeps an active owner registered while reclaiming idle browser registrations', async () => {
+  const active = control.register('scope', 'active')
+  const state = control.status('active-thread', active)
+  const owned = await control.claim('active-thread', active, state.epoch, state.version, false)
+  control.activity('active-thread', 'running', 'running-turn')
+  for (let i = 1; i < 512; i++) control.register('scope', 'unused')
+  now += 2 * 86400000
+  expect(control.register('scope', 'fresh')).toBeDefined()
+  expect(control.authenticate(active.id, active.key, active.scope)).toBe(active)
+  expect(control.status('active-thread', active).activity).toBe('running')
+  await expect(control.mutate('active-thread', active, owned.proof, async () => true)).rejects.toThrow()
+})
+it('reclaims expired terminals without deleting active owners or allowing an old proof', async () => {
+  const original = control.register('scope', 'first')
+  const state = control.status('thread-old', original)
+  const claimed = await control.claim('thread-old', original, state.epoch, state.version, false)
+  for (let i = 1; i < 512; i++) control.register('scope', 'idle')
+  now += 2 * 86400000
+  const current = control.register('scope', 'new')
+  expect(current.id).not.toBe(original.id)
+  expect(() => control.authenticate(original.id, original.key, original.scope)).toThrow()
+  await expect(control.mutate('thread-old', current, claimed.proof, async () => true)).rejects.toThrow()
+})
+it('retains unresolved sends beyond retention and compacts completed journal rows', async () => {
+  const receipt = { id: 'pending-retain-0001', scope: 'scope', threadId: 'thread', hash: 'hash', state: 'pending', at: now - 90 * 86400000 }
+  const ledger = join(dir, 'receipts.jsonl')
+  await writeFile(ledger, Array.from({ length: 1100 }, () => JSON.stringify(receipt)).join('\n') + '\n')
+  const current = control.register('scope', 'current')
+  expect(await control.receipt(receipt.id, current)).toMatchObject({ state: 'pending' })
+  const status = control.status('new-thread', current)
+  const state = await control.claim('new-thread', current, status.epoch, status.version, false)
+  await control.sendOnce('new-thread', current, state.proof, 'completed-send-001', {}, async () => ({ turn: { id: 'turn' } }))
+  expect((await readFile(ledger, 'utf8')).trim().split('\n').length).toBeLessThan(10)
+  const restarted = new ConversationControl(ledger, () => now)
+  const terminal = restarted.register('scope', 'reload')
+  expect(await restarted.receipt(receipt.id, terminal)).toMatchObject({ state: 'pending' })
+  expect(await restarted.receipt('completed-send-001', terminal)).toMatchObject({ state: 'completed' })
+})
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'control-test-')); now = Date.now(); control = new ConversationControl(join(dir, 'receipts.jsonl'), () => now) })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
 function clients() { return [control.register('same-auth', '网页 A'), control.register('same-auth', '网页 B')] as const }

@@ -199,7 +199,7 @@
         @skills-changed="emit('skills-changed')"
         @try-item="(payload) => emit('try-item', payload)"
       >
-        <template #before-installed>
+        <template #after-installed>
           <div class="skills-embedded-section">
             <button class="skills-embedded-toggle" type="button" @click="isMcpSectionOpen = !isMcpSectionOpen">
               <span class="skills-embedded-title">MCPs({{ visibleMcpServers.length }})</span>
@@ -483,9 +483,9 @@ const { t } = useUiLanguage()
 const skillsHub = ref<InstanceType<typeof SkillsHub> | null>(null)
 
 const tabs: Array<{ id: DirectoryTab; label: string; subtitle: string }> = [
+  { id: 'skills', label: 'Skills', subtitle: 'Manage personal skills and MCP connections.' },
   { id: 'plugins', label: 'Plugins', subtitle: 'Manage installed plugins on this machine.' },
   { id: 'apps', label: 'Apps', subtitle: 'Connect Codex to external apps and services.' },
-  { id: 'skills', label: 'Skills', subtitle: 'Manage personal skills and MCP connections.' },
 ]
 
 function isDirectoryTab(value: unknown): value is DirectoryTab {

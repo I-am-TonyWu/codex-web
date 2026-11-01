@@ -16,7 +16,7 @@ function json(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true 
 json(path.join(bundle, 'manifest.json'), manifest);
 for (const directory of ['codex/sessions', 'Documents-Codex', 'tray-workspace', 'extra-projects/0', 'scripts']) fs.mkdirSync(path.join(bundle, 'backup', directory), { recursive: true });
 fs.mkdirSync(path.join(bundle, 'scripts'), { recursive: true });
-fs.copyFileSync(path.join(__dirname, 'scripts/restore-data.cjs'), path.join(bundle, 'scripts/restore-data.cjs'));
+for (const name of ['restore-data.cjs', 'toml-paths.cjs']) fs.copyFileSync(path.join(__dirname, 'scripts', name), path.join(bundle, 'scripts', name));
 const original = { 'local-projects': { projectId: { id: 'projectId', name: 'Project', rootPaths: [oldProject] } },
   'thread-project-assignments': { task: { projectKind: 'local', projectId: 'projectId' } },
   'thread-workspace-root-hints': { task: oldProject }, 'sidebar-project-thread-orders': { projectId: { threadIds: ['task'] } },
@@ -47,4 +47,12 @@ assert.deepEqual({ ...restoredDb.prepare('SELECT * FROM threads').get() }, { id:
 assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bundle, 'backup/codex/.codex-global-state.json'))), original);
 assert.notEqual(run().status, 0, 'Never overwrite a non-empty target');
 console.log(JSON.stringify({ passed: true, scenarios: ['modern rootPaths', 'redirected Documents', 'extra project files', 'stable memberships and IDs', 'host keys', 'SQLite integrity/path', 'session cwd', 'unchanged message text', 'untouched backup', 'non-empty target rejected'] }));
-// Retain the tiny fixture for inspection; no real profile or data is involved.
+const brokenTarget = path.join(temp, 'failed-profile');
+fs.writeFileSync(path.join(bundle, 'backup/codex/broken.sqlite'), 'not a database');
+const failed = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(bundle, 'scripts/restore-data.cjs'), brokenTarget, path.join(brokenTarget, 'AppData/Local'), path.join(brokenTarget, 'Documents/Codex')], { encoding: 'utf8', windowsHide: true });
+assert.notEqual(failed.status, 0);
+assert.equal(JSON.parse(fs.readFileSync(path.join(brokenTarget, 'CodexWeb-restore-progress.json'))).status, 'failed');
+assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bundle, 'backup/codex/.codex-global-state.json'))), original);
+console.log('Partial failure preserves backup and writes recovery record');
+// Only the unique fixture owned by this test is removed.
+fs.rmSync(temp, { recursive: true, force: true });

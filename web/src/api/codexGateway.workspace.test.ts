@@ -1,3 +1,4 @@
+import { withControlRequests } from './controlTestFixture'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = (name = 'Alpha') => ({ order: ['C:\\Projects\\alpha'], labels: {}, active: [], projectOrder: ['alpha'],
@@ -9,7 +10,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 describe('live desktop project cache', () => {
   it('shares in-flight requests, expires the cache, and never shares mutable metadata', async () => {
     const fetch = vi.fn().mockImplementation(async () => response())
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', withControlRequests(fetch))
     const { getWorkspaceRootsState } = await import('./codexGateway')
     const [first, second] = await Promise.all([getWorkspaceRootsState(), getWorkspaceRootsState()])
     expect(fetch).toHaveBeenCalledTimes(1)
@@ -24,7 +25,7 @@ describe('live desktop project cache', () => {
   })
   it('forces an immediate refresh after desktop changes and requests uncached HTTP responses', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response()).mockResolvedValueOnce(response('Renamed'))
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', withControlRequests(fetch))
     const { getWorkspaceRootsState } = await import('./codexGateway')
     await getWorkspaceRootsState()
     expect((await getWorkspaceRootsState({ force: true })).localProjects?.[0]?.name).toBe('Renamed')
@@ -34,7 +35,7 @@ describe('live desktop project cache', () => {
     let resolveOld!: (value: Response) => void
     const fetch = vi.fn().mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveOld = resolve }))
       .mockResolvedValueOnce(new Response('{}')).mockResolvedValueOnce(response('New name'))
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', withControlRequests(fetch))
     const { getWorkspaceRootsState, mutateLocalProject } = await import('./codexGateway')
     const old = getWorkspaceRootsState()
     await mutateLocalProject({ type: 'rename', projectId: 'alpha', name: 'New name' })
@@ -45,14 +46,14 @@ describe('live desktop project cache', () => {
   })
   it('retries failed reads instead of permanently caching failure', async () => {
     const fetch = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(response())
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', withControlRequests(fetch))
     const { getWorkspaceRootsState } = await import('./codexGateway')
     await expect(getWorkspaceRootsState()).rejects.toThrow('offline')
     expect((await getWorkspaceRootsState()).localProjects).toHaveLength(1)
   })
   it('invalidates the sidebar cache after a membership change', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response()).mockResolvedValueOnce(new Response('{}')).mockResolvedValueOnce(response('Moved'))
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', withControlRequests(fetch))
     const { getWorkspaceRootsState, setThreadProject } = await import('./codexGateway')
     await getWorkspaceRootsState()
     await setThreadProject('one', null)
@@ -61,7 +62,7 @@ describe('live desktop project cache', () => {
   })
   it('surfaces a concurrent/deleted project error without invalidating successful reads', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response()).mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Project deleted' }), { status: 409 }))
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', withControlRequests(fetch))
     const { getWorkspaceRootsState, setThreadProject } = await import('./codexGateway')
     await getWorkspaceRootsState()
     await expect(setThreadProject('one', 'gone')).rejects.toThrow('Project deleted')

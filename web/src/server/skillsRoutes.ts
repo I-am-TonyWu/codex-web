@@ -1,8 +1,9 @@
+import { HttpError } from './requestPolicy.js'
 import { spawn } from 'node:child_process'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { readFile, readdir, rm, stat, realpath, lstat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
-import { join, posix } from 'node:path'
+import { join, posix, dirname, relative, isAbsolute } from 'node:path'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { getSkillPresentation, type translateSkillText } from './skillPresentation.js'
 
@@ -275,7 +276,7 @@ async function runGitFetchWithRefLockRetry(repoDir: string, args: string[] = ['f
 }
 
 async function buildLocalHubEntry(info: InstalledSkillInfo, translate?: typeof translateSkillText): Promise<SkillHubEntry> {
-  const presentation = await readLocalSkillPresentation(info, translate)
+  const presentation = await readLocalSkillPresentation(info, translate, false)
   return {
     name: info.name,
     owner: 'local',
@@ -553,7 +554,20 @@ async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkill
   return await scanInstalledSkillsFromDir(getSkillsInstallDir())
 }
 
-export async function collectInstalledSkillsMap(appServer: AppServerLike): Promise<Map<string, InstalledSkillInfo>> {
+const installedSnapshots = new WeakMap<AppServerLike, { home: string; expires: number; promise: Promise<Map<string, InstalledSkillInfo>> }>()
+export function invalidateInstalledSkillsCache(appServer: AppServerLike): void { installedSnapshots.delete(appServer) }
+export function collectInstalledSkillsMap(appServer: AppServerLike): Promise<Map<string, InstalledSkillInfo>> {
+  const home = getCodexHomeDir()
+  const cached = installedSnapshots.get(appServer)
+  if (cached?.home === home && cached.expires > Date.now()) return cached.promise
+  const promise = readInstalledSkillsMap(appServer)
+  const snapshot = { home, expires: Date.now() + 30_000, promise }
+  installedSnapshots.set(appServer, snapshot)
+  void promise.catch(() => { if (installedSnapshots.get(appServer) === snapshot) installedSnapshots.delete(appServer) })
+  return promise
+}
+
+async function readInstalledSkillsMap(appServer: AppServerLike): Promise<Map<string, InstalledSkillInfo>> {
   const installedMap = await scanInstalledSkillsFromDisk()
   // Never show disk entries as enabled when Codex's actual state cannot be read.
   const result = await appServer.rpc('skills/list', { forceReload: true }) as { data?: Array<{ skills?: RpcSkillRecord[] }> }
@@ -599,12 +613,25 @@ export function extractSkillDescriptionFromMarkdown(markdown: string): string {
   return markdown.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith('#') && !line.startsWith('---')) ?? ''
 }
 
-async function readLocalSkillPresentation(info: InstalledSkillInfo, translate?: typeof translateSkillText) {
-  const markdown = await readFile(info.path, 'utf8')
-  return getSkillPresentation({
+const skillMarkdownCache = new Map<string, { signature: string; markdown: string }>()
+async function readLocalSkillPresentation(info: InstalledSkillInfo, translate?: typeof translateSkillText, full = true) {
+  if (!full && info.description) return getSkillPresentation({ description: info.description, content: '' }, translate)
+  const stats = await stat(info.path)
+  if (stats.size > 2 * 1024 * 1024) throw new Error('Skill document exceeds the presentation limit')
+  const signature = `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+  const key = comparableSkillPath(info.path)
+  let cached = skillMarkdownCache.get(key)
+  if (cached?.signature !== signature) {
+    cached = { signature, markdown: await readFile(info.path, 'utf8') }
+    skillMarkdownCache.set(key, cached)
+    while (skillMarkdownCache.size > 128) skillMarkdownCache.delete(skillMarkdownCache.keys().next().value!)
+  }
+  const markdown = cached!.markdown
+  const presentation = await getSkillPresentation({
     description: info.description || extractSkillDescriptionFromMarkdown(markdown),
-    content: markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, '').trim(),
+    content: full ? markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, '').trim() : '',
   }, translate)
+  return { ...presentation, ...(full ? { originalContent: markdown } : {}) }
 }
 
 export async function handleSkillsRoutes(
@@ -621,7 +648,7 @@ export async function handleSkillsRoutes(
       installed.sort((a, b) => a.name.localeCompare(b.name))
       setJson(res, 200, { installed })
     } catch (error) {
-      setJson(res, 502, { error: getErrorMessage(error, 'Failed to fetch skills hub') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 502, { error: getErrorMessage(error, 'Failed to fetch skills hub') })
     }
     return true
   }
@@ -638,7 +665,7 @@ export async function handleSkillsRoutes(
       const results = await enrichSkillSearchDescriptions(parseNpxSkillsFindOutput(output, installedMap))
       setJson(res, 200, { results })
     } catch (error) {
-      setJson(res, 502, { error: getErrorMessage(error, 'Failed to search skills') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 502, { error: getErrorMessage(error, 'Failed to search skills') })
     }
     return true
   }
@@ -665,7 +692,7 @@ export async function handleSkillsRoutes(
       }
       setJson(res, 404, { error: 'Only installed local skills are available in Skills Hub.' })
     } catch (error) {
-      setJson(res, 502, { error: getErrorMessage(error, 'Failed to fetch SKILL.md') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 502, { error: getErrorMessage(error, 'Failed to fetch SKILL.md') })
     }
     return true
   }
@@ -682,6 +709,7 @@ export async function handleSkillsRoutes(
         return true
       }
       await runCommand('npx', ['--yes', 'skills', 'add', installSource, '--yes', '--global'], { timeoutMs: 120_000 })
+      invalidateInstalledSkillsCache(appServer)
       try { await withTimeout(appServer.rpc('skills/list', { forceReload: true }), 10_000, 'skills/list reload') } catch {}
       const installedMap = await collectInstalledSkillsMap(appServer)
       const installed = installedMap.get(name || installSource.slice(installSource.lastIndexOf('@') + 1))
@@ -691,7 +719,7 @@ export async function handleSkillsRoutes(
       await ensureInstalledSkillIsValid(appServer, installed.path)
       setJson(res, 200, { ok: true, path: installed.path })
     } catch (error) {
-      setJson(res, 502, { error: getErrorMessage(error, 'Failed to install skill') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 502, { error: getErrorMessage(error, 'Failed to install skill') })
     }
     return true
   }
@@ -701,17 +729,29 @@ export async function handleSkillsRoutes(
       const payload = asRecord(await readJsonBody(req))
       const name = typeof payload?.name === 'string' ? payload.name : ''
       const path = typeof payload?.path === 'string' ? payload.path : ''
-      const normalizedPath = path.endsWith('/SKILL.md') ? path.slice(0, -'/SKILL.md'.length) : path
-      const target = normalizedPath || (name ? join(getSkillsInstallDir(), name) : '')
-      if (!target) {
-        setJson(res, 400, { error: 'Missing name or path' })
-        return true
+      const installedMap = await collectInstalledSkillsMap(appServer)
+      const info = path
+        ? [...installedMap.values()].find(item => comparableSkillPath(item.path.replace(/[\\/]SKILL\.md$/iu, '')) === comparableSkillPath(path.replace(/[\\/]SKILL\.md$/iu, '')))
+        : installedMap.get(name)
+      if (!info || !isPersonalSkillPath(info.path)) { setJson(res, 403, { error: 'Only installed personal skills can be removed.' }); return true }
+      const target = dirname(info.path)
+      let allowed = false
+      for (const root of [getSkillsInstallDir(), join(homedir(), '.agents', 'skills')]) {
+        const lexical = relative(root, target)
+        if (!lexical || lexical.startsWith('..') || isAbsolute(lexical)) continue
+        const actualRoot = await realpath(root)
+        const actual = await realpath(target)
+        const inside = relative(actualRoot, actual)
+        const descriptor = relative(actual, await realpath(info.path))
+        if (inside && !inside.startsWith('..') && !isAbsolute(inside) && descriptor.toLowerCase() === 'skill.md' && !(await lstat(target)).isSymbolicLink()) allowed = true
       }
+      if (!allowed) { setJson(res, 403, { error: 'Skill path leaves its personal install directory.' }); return true }
       await rm(target, { recursive: true, force: true })
+      invalidateInstalledSkillsCache(appServer)
       try { await withTimeout(appServer.rpc('skills/list', { forceReload: true }), 10_000, 'skills/list reload') } catch {}
       setJson(res, 200, { ok: true, deletedPath: target })
     } catch (error) {
-      setJson(res, 502, { error: getErrorMessage(error, 'Failed to uninstall skill') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 502, { error: getErrorMessage(error, 'Failed to uninstall skill') })
     }
     return true
   }

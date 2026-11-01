@@ -24,6 +24,7 @@ import {
 } from '../server/appServerRuntimeConfig.js'
 import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
+import { FILE_UPLOAD_TIMEOUT_MS } from '../shared/fileUpload.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
 
 const program = new Command().name('codexui').description('Web interface for Codex app-server')
@@ -537,6 +538,7 @@ async function startServer(options: {
     : null
   const { app, dispose, attachWebSocket } = createApp({ password })
   const server = createServer(app)
+  server.requestTimeout = FILE_UPLOAD_TIMEOUT_MS
   attachWebSocket(server)
   const port = await listenWithFallback(server, requestedPort, options.host)
   process.env.CODEXUI_SERVER_PORT = String(port)

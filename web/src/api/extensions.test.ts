@@ -1,3 +1,4 @@
+import { withControlRequests } from './controlTestFixture'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getExtensions, getSkillsList, startThreadTurn } from './codexGateway'
 import { describeExtension } from '../utils/extensionDescriptions'
@@ -19,10 +20,10 @@ describe('extension selections', () => {
   })
   it('sends plugins as native mentions and skills as skill inputs', async () => {
     let payload: any
-    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    vi.stubGlobal('fetch', withControlRequests(vi.fn(async (_url, init) => {
       payload = JSON.parse(init.body)
       return new Response(JSON.stringify({result:{turn:{id:'test'}}}))
-    }))
+    })))
     await startThreadTurn('thread-test','test',[],'gpt-6-astra','low',[
       {name:'vercel',path:'plugin://vercel@openai-curated-remote'},
       {name:'my-skill',path:'C:\\skills\\mine\\SKILL.md'},

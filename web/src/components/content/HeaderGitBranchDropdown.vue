@@ -33,7 +33,7 @@
 
         <div v-if="statusMessage" class="header-git-status" :class="{ 'is-error': statusKind === 'error' }">
           <span>{{ statusMessage }}</span>
-          <a v-if="statusKind === 'error'" class="header-git-feedback" :href="feedbackMailto" @click="prepareHeaderFeedback($event, statusMessage)">Send feedback</a>
+          <a v-if="statusKind === 'error'" class="header-git-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareHeaderFeedback($event, statusMessage)">{{ t('Send feedback') }}</a>
         </div>
 
         <div class="header-git-columns" :class="{ 'has-commit-files': Boolean(selectedCommit) }">
@@ -194,6 +194,7 @@ import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
+import { t } from '../../composables/useUiLanguage'
 import { copyTextToClipboard } from '../../utils/clipboard'
 
 const props = defineProps<{
@@ -238,14 +239,14 @@ const copiedCommitSha = ref('')
 const lastCurrentBranch = ref('')
 const showResetHistoryRefs = ref(true)
 const showReview = computed(() => props.showReview !== false)
-const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
-const feedbackMailto = feedbackMailtoBase()
+const { buildFeedbackUrl, feedbackBaseUrl, recordVisibleFailure } = useFeedbackDiagnostics()
+const feedbackUrl = feedbackBaseUrl()
 
 function prepareHeaderFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
   const target = event.currentTarget
   if (target instanceof HTMLAnchorElement) {
-    target.href = buildFeedbackMailto()
+    target.href = buildFeedbackUrl()
   }
 }
 

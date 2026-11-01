@@ -53,12 +53,16 @@ namespace CodexWebTray {
             }
         }
         internal static Bitmap Draw(int size, Color color) {
+            return Draw(size,color,color);
+        }
+        internal static Bitmap Draw(int size, Color left, Color right) {
             var b = new Bitmap(size, size);
             using (var g = Graphics.FromImage(b)) {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.ScaleTransform(size / 64f, size / 64f);
                 using (var brush = new SolidBrush(Color.FromArgb(20, 30, 47))) g.FillEllipse(brush, 2, 2, 60, 60);
-                using (var pen = new Pen(color, 6)) g.DrawEllipse(pen, 6, 6, 52, 52);
+                using (var pen = new Pen(left, 6)) g.DrawArc(pen, 6, 6, 52, 52, 92, 176);
+                using (var pen = new Pen(right, 6)) g.DrawArc(pen, 6, 6, 52, 52, 272, 176);
                 using (var pen = new Pen(Color.White, 4.6f)) {
                     pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
                     g.DrawLines(pen, new [] { new PointF(25, 23), new PointF(16, 32), new PointF(25, 41) });
@@ -69,7 +73,10 @@ namespace CodexWebTray {
             return b;
         }
         internal static Icon Make(Lamp state) {
-            using (var bitmap = Draw(32, ColorFor(state))) {
+            return Make(state,state);
+        }
+        internal static Icon Make(Lamp codex, Lamp openCode) {
+            using (var bitmap = Draw(32, ColorFor(codex),ColorFor(openCode))) {
                 IntPtr h = bitmap.GetHicon();
                 try { using (var icon = Icon.FromHandle(h)) return (Icon)icon.Clone(); }
                 finally { DestroyIcon(h); }
@@ -83,12 +90,14 @@ namespace CodexWebTray {
         readonly System.Windows.Forms.Timer timer;
         readonly Runtime runtime = new Runtime();
         readonly Monitor monitor;
+        readonly OpenCodeService openCode = new OpenCodeService();
         readonly object gate = new object();
-        readonly Icon[] icons = new Icon[4];
+        readonly Icon[] icons = new Icon[16];
         readonly ToolStripMenuItem status, start, stop, retry, startup, open;
         int busy;
         volatile bool closing;
         int restartRequested;
+        volatile bool openCodeWorking;
         volatile string snapshot = "{\"state\":\"Waiting\",\"detail\":\"正在初始化\"}";
         Lamp? lastState;
         string lastDetail;
@@ -98,23 +107,27 @@ namespace CodexWebTray {
         CheckBox panelStartup;
         Button panelOpen, panelStart, panelStop;
         Button panelRetry;
+        Label openCodeStatus, openCodeDetail;
+        Button openCodeOpen, openCodeStart, openCodeStop, openCodeRestart;
         readonly DateTime started = DateTime.UtcNow;
         internal TrayContext(bool show) {
             var unused = dispatcher.Handle;
             monitor = new Monitor(runtime);
-            foreach (Lamp l in Enum.GetValues(typeof(Lamp))) icons[(int)l] = Icons.Make(l);
+            foreach (Lamp c in Enum.GetValues(typeof(Lamp))) foreach(Lamp o in Enum.GetValues(typeof(Lamp))) icons[(int)c*4+(int)o] = Icons.Make(c,o);
             var menu = new ContextMenuStrip { Font = new Font("Microsoft YaHei UI", 10), ShowImageMargin = false, ShowCheckMargin = true };
             status = new ToolStripMenuItem("等待 Codex 启动") { Enabled = false };
-            open = new ToolStripMenuItem("打开网页", null, (s,e) => OpenWeb());
+            open = new ToolStripMenuItem("打开两个网页", null, (s,e) => OpenBoth());
             start = new ToolStripMenuItem("开启服务（自动跟随 Codex）", null, (s,e) => Enable());
             stop = new ToolStripMenuItem("关闭服务（暂停自动启动）", null, (s,e) => Disable());
             retry = new ToolStripMenuItem("重试 / 重启服务", null, (s,e) => Restart());
             startup = new ToolStripMenuItem("开机自启（登录 Windows 后）", null, (s,e) => SetStartup(!Startup.Enabled));
             menu.Items.AddRange(new ToolStripItem[] { status, new ToolStripSeparator(), open,
+                new ToolStripMenuItem("打开 Codex 网页",null,(s,e)=>OpenWeb()),
+                new ToolStripMenuItem("打开 OpenCode 网页",null,(s,e)=>OpenUrl(OpenCodeService.Url)),
                 new ToolStripMenuItem("设置", null, (s,e) => ShowPanel()),
                 new ToolStripSeparator(), new ToolStripMenuItem("退出", null, (s,e) => Exit()) });
-            tray = new NotifyIcon { Visible = true, Icon = icons[(int)Lamp.Waiting], Text = "Codex 网页：正在初始化", ContextMenuStrip = menu };
-            tray.DoubleClick += (s,e) => { if (monitor.State == Lamp.Healthy) OpenWeb(); else ShowPanel(); };
+            tray = new NotifyIcon { Visible = true, Icon = icons[0], Text = "Codex：正在初始化\nOpenCode：正在初始化", ContextMenuStrip = menu };
+            tray.DoubleClick += (s,e) => OpenBoth();
             timer = new System.Windows.Forms.Timer { Interval = 3000 };
             timer.Tick += (s,e) => Poll(); timer.Start();
             SystemEvents.SessionEnding += OnSessionEnding;
@@ -132,12 +145,15 @@ namespace CodexWebTray {
                     if (closing) return;
                     if (Interlocked.Exchange(ref restartRequested, 0) == 1) { runtime.Stop(); monitor.Retry(); }
                     monitor.Tick(DateTime.UtcNow);
+                    if (!openCodeWorking) openCode.Refresh();
                     if (lastState != monitor.State || lastDetail != monitor.Detail) {
                         Paths.Log(monitor.State + ": " + monitor.Detail); lastState = monitor.State; lastDetail = monitor.Detail;
                     }
                     snapshot = new JavaScriptSerializer().Serialize(new {
                         state = monitor.State.ToString(), detail = monitor.Detail, enabled = monitor.Enabled,
                         desktopRunning = monitor.Desktop, servicePid = runtime.ServicePid, url = Paths.Url,
+                        openCode = new { state = openCode.State.ToString(), detail = openCode.Detail, url = OpenCodeService.Url, working = openCodeWorking },
+                        tooltip = Tooltip(),
                         pollSeconds = 3, autoStart = Startup.Enabled, trayVisible = tray.Visible,
                         dataRoot = Paths.Root,
                         hasCloudflareTokenRegistry = Secrets.HasStoredToken, executable = Application.ExecutablePath, version = Program.Version, userSid = WindowsIdentity.GetCurrent().User.Value, hasCloudflareTokenFile = File.Exists(Path.Combine(Secrets.DirectoryPath, "cloudflare-token.dat")),
@@ -158,7 +174,22 @@ namespace CodexWebTray {
             try { Startup.Set(value); UpdateUi(); Poll(); }
             catch (Exception ex) { MessageBox.Show("无法修改开机自启：" + ex.Message, "Codex 网页托盘"); }
         }
-        void OpenWeb() { try { Process.Start(new ProcessStartInfo(Paths.Url) { UseShellExecute = true }); } catch (Exception ex) { Paths.Log(ex.Message); } }
+        void OpenWeb() { OpenUrl(Paths.Url); }
+        void OpenUrl(string url) { try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch (Exception ex) { Paths.Log(ex.Message); } }
+        void OpenBoth() { OpenWeb(); OpenUrl(OpenCodeService.Url); if(monitor.State!=Lamp.Healthy || openCode.State!=Lamp.Healthy) ShowPanel(); }
+        async void ControlOpenCode(string action) {
+            if(openCodeWorking)return;
+            if(action!="start" && MessageBox.Show(panel,"此操作会停止 OpenCode 共享后台服务，可能中断桌面客户端和网页中的任务。确认继续？","OpenCode 服务",MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+            openCodeWorking=true;UpdateUi();
+            try { await Task.Run(()=>{lock(gate)openCode.Control(action);}); }
+            catch(Exception ex) { MessageBox.Show(panel,ex.Message,"OpenCode 操作未完成"); }
+            finally {openCodeWorking=false;UpdateUi();Poll();}
+        }
+        void ChangeOpenCodePassword() {
+            using(var form=SecurityDialogs.PasswordWindow((password,revoke)=>{lock(gate)openCode.ChangePassword(password);Poll();},true))form.ShowDialog(panel);
+        }
+        internal static string Brief(Lamp state) { return state==Lamp.Healthy?"正常":state==Lamp.Paused?"已停止":state==Lamp.Waiting?"正在启动":"异常"; }
+        string Tooltip() { return "Codex 网页："+(monitor.State==Lamp.Waiting?"等待桌面启动":Brief(monitor.State))+"\nOpenCode 网页："+(openCodeWorking?"正在处理":Brief(openCode.State)); }
         void OpenLogs() { Directory.CreateDirectory(Paths.Logs); Process.Start(new ProcessStartInfo(Paths.Logs) { UseShellExecute = true }); }
         void ChangePassword() {
             SecurityDialogs.Password(panel, (password,revoke) => {
@@ -180,33 +211,40 @@ namespace CodexWebTray {
         void UpdateUi() {
             if (closing) return;
             Lamp state = monitor.State;
-            tray.Icon = icons[(int)state];
+            var icon=icons[(int)(monitor.Desktop?state:Lamp.Paused)*4+(int)(openCodeWorking?Lamp.Waiting:openCode.State)];
+            tray.Icon = icon;
             string brief = state == Lamp.Healthy ? "网页服务正常" : state == Lamp.Waiting ? "等待 Codex 启动" : state == Lamp.Paused ? "服务已手动关闭" : "服务异常或正在启动";
-            tray.Text = "Codex 网页：" + brief;
-            status.Text = brief;
-            open.Enabled = state == Lamp.Healthy;
+            tray.Text = Tooltip();
+            status.Text = "Codex："+Brief(state)+" / OpenCode："+Brief(openCode.State);
+            open.Enabled = true;
             start.Enabled = !monitor.Enabled;
             stop.Enabled = monitor.Enabled;
             retry.Enabled = monitor.Desktop;
             startup.Checked = Startup.Enabled;
             if (panel != null && !panel.IsDisposed) {
-                panel.Icon = icons[(int)state];
-                panelStatus.Text = brief; panelStatus.ForeColor = Icons.ColorFor(state);
+                panel.Icon = icon;
+                panelStatus.Text = "Codex · "+brief; panelStatus.ForeColor = Icons.ColorFor(monitor.Desktop?state:Lamp.Paused);
                 panelDetail.Text = state == Lamp.Healthy ? "Codex 已连接 · 每 3 秒自动检测" : monitor.Detail;
                 panelStartup.Checked = Startup.Enabled;
-                panelOpen.Enabled = open.Enabled;
+                panelOpen.Enabled = state==Lamp.Healthy;
                 panelStart.Enabled = start.Enabled;
                 panelStop.Enabled = stop.Enabled;
                 panelRetry.Enabled = retry.Enabled;
+                openCodeStatus.Text="OpenCode · "+(openCodeWorking?"正在处理":Brief(openCode.State));
+                openCodeStatus.ForeColor=Icons.ColorFor(openCodeWorking?Lamp.Waiting:openCode.State);
+                openCodeDetail.Text=openCodeWorking?"正在执行服务操作，请稍候":openCode.Detail;
+                openCodeOpen.Enabled=!openCodeWorking && openCode.State==Lamp.Healthy;
+                openCodeStart.Enabled=!openCodeWorking && openCode.State!=Lamp.Healthy;
+                openCodeStop.Enabled=openCodeRestart.Enabled=!openCodeWorking && openCode.State!=Lamp.Paused;
             }
         }
         internal void ShowPanel() {
             if (panel != null && !panel.IsDisposed) { panel.Show(); panel.Activate(); return; }
-            panel = new Form { Text = "Codex 网页 · 设置", AutoScaleMode = AutoScaleMode.None, ClientSize = new Size(560, 580), StartPosition = FormStartPosition.CenterScreen,
+            panel = new Form { Text = "Codex / OpenCode 网页 · 设置", AutoScaleMode = AutoScaleMode.None, ClientSize = new Size(560, 740), StartPosition = FormStartPosition.CenterScreen,
                 FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, Font = new Font("Microsoft YaHei UI", 10),
                 BackColor = Color.FromArgb(17, 24, 39), ForeColor = Color.FromArgb(235,240,248), Icon = icons[(int)monitor.State] };
-            AddLabel(panel, "Codex 网页", 28, 22, 340, 34, 20, true);
-            AddLabel(panel, "本地服务管理", 30, 62, 400, 24, 10, false);
+            AddLabel(panel, "Codex / OpenCode", 28, 22, 480, 34, 20, true);
+            AddLabel(panel, "本地服务管理 · 图标左侧 Codex / 右侧 OpenCode", 30, 62, 490, 24, 10, false);
             var serviceCard = AddCard(90, 160);
             panelStatus = AddLabel(serviceCard, "", 20, 16, 340, 28, 14, true);
             panelDetail = AddLabel(serviceCard, "", 20, 50, 462, 36, 10, false);
@@ -215,29 +253,38 @@ namespace CodexWebTray {
             panelStart = AddButton(serviceCard, "开启服务", 140, 120, 108, Enable);
             panelStop = AddButton(serviceCard, "关闭服务", 260, 120, 108, Disable);
             panelRetry = AddButton(serviceCard, "重启服务", 380, 120, 108, Restart);
-            var settingsCard = AddCard(262, 82);
+            var openCodeCard = AddCard(262,160);
+            openCodeStatus=AddLabel(openCodeCard,"",20,16,450,28,14,true);
+            openCodeDetail=AddLabel(openCodeCard,"",20,50,462,36,10,false);
+            AddLabel(openCodeCard,OpenCodeService.Url,20,87,450,24,10,false);
+            openCodeOpen=AddButton(openCodeCard,"打开网页",20,120,108,()=>OpenUrl(OpenCodeService.Url),true);
+            openCodeStart=AddButton(openCodeCard,"开启服务",140,120,108,()=>ControlOpenCode("start"));
+            openCodeStop=AddButton(openCodeCard,"关闭服务",260,120,108,()=>ControlOpenCode("stop"));
+            openCodeRestart=AddButton(openCodeCard,"重启服务",380,120,108,()=>ControlOpenCode("restart"));
+            var settingsCard = AddCard(434, 72);
             AddLabel(settingsCard, "启动设置", 20, 12, 440, 24, 11, true);
             panelStartup = new CheckBox { Location = new Point(20, 46), Size = new Size(224, 25), Text = "登录 Windows 后启动", FlatStyle = FlatStyle.Standard };
             panelStartup.Click += (s,e) => SetStartup(panelStartup.Checked);
             settingsCard.Controls.Add(panelStartup);
             AddButton(settingsCard, "查看日志", 340, 38, 148, OpenLogs);
-            var securityCard=AddCard(356,102);
+            var securityCard=AddCard(518,128);
             AddLabel(securityCard,"登录与远程访问",20,12,450,24,11,true);
-            AddButton(securityCard,"修改网页密码",20,52,144,ChangePassword);
-            AddButton(securityCard,"Access 登录",180,52,144,()=>SecurityDialogs.Access(panel));
-            AddButton(securityCard,"Cloudflare 站点",340,52,148,()=>SecurityDialogs.Site(panel));
-            var githubIcon = new PictureBox { Location=new Point(30,494), Size=new Size(28,28), SizeMode=PictureBoxSizeMode.Zoom, BackColor=Color.White };
+            AddButton(securityCard,"Codex 网页密码",20,44,228,ChangePassword);
+            AddButton(securityCard,"OpenCode 服务器密码",260,44,228,ChangeOpenCodePassword);
+            AddButton(securityCard,"Access 共享登录",20,84,228,()=>SecurityDialogs.Access(panel));
+            AddButton(securityCard,"Cloudflare 共享站点",260,84,228,()=>SecurityDialogs.Site(panel));
+            var githubIcon = new PictureBox { Location=new Point(30,664), Size=new Size(28,28), SizeMode=PictureBoxSizeMode.Zoom, BackColor=Color.White };
             using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("github-mark.png"))
             using(var bitmap=Image.FromStream(stream)) githubIcon.Image=new Bitmap(bitmap);
             panel.Controls.Add(githubIcon);
-            AddLabel(panel,"本程序基于 GitHub 中",68,488,450,22,9,false);
-            var sourceLink=new LinkLabel { Text="friuns2/codex-mobile v0.1.91", Location=new Point(68,510), Size=new Size(278,24), LinkColor=Color.FromArgb(125,190,255), ActiveLinkColor=Color.White, VisitedLinkColor=Color.FromArgb(125,190,255) };
+            AddLabel(panel,"本程序基于 GitHub 中",68,658,450,22,9,false);
+            var sourceLink=new LinkLabel { Text="friuns2/codex-mobile v0.1.91", Location=new Point(68,680), Size=new Size(278,24), LinkColor=Color.FromArgb(125,190,255), ActiveLinkColor=Color.White, VisitedLinkColor=Color.FromArgb(125,190,255) };
             sourceLink.LinkClicked += (s,e) => { try { Process.Start(new ProcessStartInfo("https://github.com/friuns2/codex-mobile") { UseShellExecute=true }); } catch(Exception ex) { MessageBox.Show(ex.Message,"无法打开项目网页"); } };
             panel.Controls.Add(sourceLink);
-            AddLabel(panel,"项目重构",352,510,150,24,9,false);
+            AddLabel(panel,"项目重构",352,680,150,24,9,false);
             panel.FormClosed += (s,e) => githubIcon.Image.Dispose();
-            AddLabel(panel, "关闭窗口后仍在托盘运行", 30, 540, 370, 24, 9, false);
-            var version = AddLabel(panel, "v" + Program.Version, 430, 540, 100, 24, 9, false);
+            AddLabel(panel, "关闭窗口后仍在托盘运行", 30, 710, 370, 24, 9, false);
+            var version = AddLabel(panel, "v" + Program.Version, 430, 710, 100, 24, 9, false);
             version.TextAlign = ContentAlignment.TopRight;
             panel.FormClosed += (s,e) => { panel = null; };
             // The host uses 250% display scaling. Scale the geometry once while
@@ -294,6 +341,7 @@ namespace CodexWebTray {
                                     case "autostart-on": SetStartup(true); break;
                                     case "autostart-off": SetStartup(false); break;
                                     case "show": ShowPanel(); break;
+                                    case "open-both": OpenBoth(); break;
                                     case "exit": dispatcher.BeginInvoke((Action)Exit); break;
                                     default: throw new ArgumentException("Unknown command");
                                 }
@@ -323,7 +371,7 @@ namespace CodexWebTray {
     }
 
     internal static class Program {
-        internal const string Version = "1.4.8";
+        internal const string Version = "1.6.1";
         internal static readonly string PipeName = "CodexWebTray-" + WindowsIdentity.GetCurrent().User.Value + "-" + Process.GetCurrentProcess().SessionId;
         internal static string Send(string command) {
             using (var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous)) {

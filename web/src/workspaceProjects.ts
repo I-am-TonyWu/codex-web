@@ -1,5 +1,5 @@
 // Desktop project IDs and memberships are independent of a thread's execution cwd.
-export type LocalWorkspaceProject = { id: string; name: string; rootPaths: string[] }
+export type LocalWorkspaceProject = { id: string; name: string; rootPaths: string[]; serverProjectId?: string }
 export type DesktopProjectMetadata = {
   localProjects?: LocalWorkspaceProject[]
   threadProjectAssignments?: Record<string, string>
@@ -59,7 +59,8 @@ export function normalizeProjectMetadata(value: unknown): DesktopProjectMetadata
     const id = typeof project.id === 'string' ? project.id.trim() : ''
     if (!id || seen.has(id) || id.startsWith('g-p-')) return []
     seen.add(id)
-    return [{ id, name: typeof project.name === 'string' ? project.name.trim() || id : id, rootPaths: uniqueStrings(project.rootPaths) }]
+    return [{ id, name: typeof project.name === 'string' ? project.name.trim() || id : id, rootPaths: uniqueStrings(project.rootPaths),
+      ...(typeof project.serverProjectId === 'string' ? { serverProjectId: project.serverProjectId } : {}) }]
   })
   const threadProjectAssignments = Object.fromEntries(Object.entries(record(state.threadProjectAssignments))
     .filter(([threadId, projectId]) => !!threadId && typeof projectId === 'string' && seen.has(projectId))) as Record<string, string>

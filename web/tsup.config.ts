@@ -4,7 +4,7 @@ export default defineConfig({
   entry: ['src/cli/index.ts'],
   outDir: 'dist-cli',
   format: 'esm',
-  target: 'node18',
+  target: 'node24',
   sourcemap: true,
   clean: true,
   banner: {

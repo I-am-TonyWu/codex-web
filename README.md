@@ -1,20 +1,19 @@
 # codex-web
 
+当前 Windows 托盘版本：**1.6.1**。下载和版本说明见 [GitHub Release](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) 和 [更新记录](docs/CHANGELOG-1.6.1.md)。运行中的桌面客户端即时显示项目归属仍待解决。
+
 [English](README.en.md) · **中文**
 
 把 Windows 电脑中运行的 Codex 工作环境带到浏览器：本机运行服务，手机或其他电脑通过网页访问。提供 Windows 系统托盘程序，支持自动跟随 Codex 启停、网页密码、技能与插件选择、上传进度和生成文件访问。
 
 基于 [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91** 定制，首个公开发行版为 **1.4.3.1**。这是社区项目，与 OpenAI、GitHub、Cloudflare 没有官方隶属关系。不是普通 ChatGPT 网页的镜像，不提供 ChatGPT 聊天权益转发。
 
-当前稳定版：**1.4.3.6**。最新预览版：**[1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4)**（[对话显示、任务状态与主机连接](docs/releases/1.4.4.md)）。详见[稳定版更新说明](docs/releases/1.4.3.6.md)。[全部历史版本与切换方法](docs/RELEASES.md) · [GitHub 全部 Releases](https://github.com/I-am-TonyWu/codex-web/releases)。
 
-1.4.4 包含此前本地 1.4.3.10–1.4.3.12 的累计更新：工具操作使用自然语言摘要，命令和过程图片默认折叠，任务状态固定显示。网页仅连接主机已登录的 Codex；账户操作在 Windows 客户端完成。设置顶部显示额度，支持 Ctrl+Enter 发送，Telegram 已移除。
 
-源码中的本地修订为 **1.4.8**：修复多行技能描述，卡片完整换行，卡片及详情自动显示中文，并缓存新技能或说明更新后的译文。包含此前的个人技能开关、已安装插件筛选、桌面显示兼容、统一网页权限、图片历史、紧凑标题栏和字号调整。尚未公开发布，见[本地修订说明](docs/CHANGELOG-1.4.8.md)和[Antigravity接入评估](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md)。后续版本仅使用三位版本号，下一版为 1.4.9。
 
 ## 下载和系统要求
 
-本次版本相较上次公开版的[完整更新说明](docs/releases/1.4.3.6.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。Windows 沙箱问题见[沙箱修复说明](docs/WINDOWS-SANDBOX.md)。
+本次版本相较上次公开版的[完整更新说明](docs/CHANGELOG-1.6.1.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。Windows 沙箱问题见[沙箱修复说明](docs/WINDOWS-SANDBOX.md)。
 
 - [下载 Windows x64 托盘程序](https://github.com/I-am-TonyWu/codex-web/releases/latest)。下载 `CodexWebTray.exe`，不要把 GitHub 自动生成的 Source code 压缩包当作安装程序。
 - Windows 10/11 x64、.NET Framework 4.8；需要已安装、登录并能正常工作的 Codex Windows 桌面客户端。
@@ -139,6 +138,8 @@ node package.cjs
 ```
 
 输出为 `artifacts/CodexWebTray.exe`。`package.cjs` 会打包当前 Node 可执行文件，因此必须使用 Windows x64 的 Node；它拒绝覆盖已有 `tray/payload`，重复构建前请将该生成目录移走或删除。`build.ps1 -Test` 执行监控和安全设置测试。
+
+源码开发、服务构建和迁移脚本均要求 Node.js 24 或更新版本；正式 EXE 自带运行时。开发服务器只接受本机回环地址与本机 Host，远程访问使用正式服务的认证入口。在 `web` 运行 `npm run check` 可统一执行服务端/前端类型检查和单元、隔离 HTTP 测试；`node tray/package.cjs --check` 在不写入 payload 的情况下检查平台、构建资源、版本和原生 PTY。18 项优化的实施与验收见 [修复记录](docs/CODE-OPTIMIZATION-20261015.md)。
 
 网页单独开发：在 `web/` 下执行 `npm run dev -- --host 127.0.0.1 --port 4173`（若开发包装脚本不转发参数，可直接运行 `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4173`）。发布包的正式服务端口是 18923；开发服务器不是正式部署方式。
 

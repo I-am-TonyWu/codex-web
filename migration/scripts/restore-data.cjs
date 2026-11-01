@@ -2,6 +2,7 @@
 // Restore into an empty target. Only copied metadata is changed; source backups remain intact.
 const fs = require('node:fs');
 const path = require('node:path');
+const { remapTomlPaths } = require('./toml-paths.cjs');
 const { DatabaseSync } = require('node:sqlite');
 const bundle = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(bundle, 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
@@ -10,6 +11,13 @@ if (!target || !path.isAbsolute(target)) throw Error('An absolute target profile
 const profile = path.resolve(target);
 const local = process.argv[3] ? path.resolve(process.argv[3]) : path.join(profile, 'AppData', 'Local');
 const documents = process.argv[4] ? path.resolve(process.argv[4]) : path.join(profile, 'Documents', 'Codex');
+const progressFile = path.join(profile, 'CodexWeb-restore-progress.json');
+let restoreStarted = false;
+process.once('uncaughtException', error => {
+  if (restoreStarted) fs.writeFileSync(progressFile, JSON.stringify({ status: 'failed', message: error.message, destinations, recovery: 'Source backup is untouched. Inspect partial targets; retry into a new empty target.' }, null, 2));
+  console.error(error.message);
+  process.exitCode = 1;
+});
 const destinations = [path.join(profile, '.codex'), documents, path.join(local, 'CodexWebTray', 'workspace')];
 const mappings = [
   [manifest.oldDocumentsCodex, documents],
@@ -75,6 +83,9 @@ for (const extra of manifest.extraRoots || []) {
   if (fs.existsSync(destination) && fs.readdirSync(destination).length) throw Error('Extra target must be empty: ' + destination);
   pairs.push([extra.backup, destination]);
 }
+fs.mkdirSync(profile, { recursive: true });
+restoreStarted = true;
+fs.writeFileSync(progressFile, JSON.stringify({ status: 'running', destinations }));
 for (const [sub, dest] of pairs) {
   const source = path.join(bundle, 'backup', sub);
   if (!fs.existsSync(source)) throw Error('Missing backup: ' + sub);
@@ -142,19 +153,13 @@ for (const p of walk(codex)) {
 // Config paths may appear in TOML table keys or quoted command/cwd values.
 const config = path.join(codex, 'config.toml');
 if (fs.existsSync(config)) {
-  let raw = fs.readFileSync(config, 'utf8');
-  for (const [oldRoot, newRoot] of mappings) {
-    for (const slash of ['\\', '/', '\\\\']) {
-      const old = oldRoot.replaceAll('\\', slash); const next = newRoot.replaceAll('\\', slash);
-      raw = raw.split(old).join(next);
-    }
-  }
+  const raw = remapTomlPaths(fs.readFileSync(config, 'utf8'), mappings);
   fs.writeFileSync(config, raw);
 }
 const autoRoot = path.join(codex, 'automations');
 if (fs.existsSync(autoRoot)) for (const p of walk(autoRoot)) if (p.endsWith('.toml')) {
   let raw = fs.readFileSync(p, 'utf8').replace(/^status\s*=\s*"ACTIVE"/gm, 'status = "PAUSED"');
-  for (const [oldRoot, newRoot] of mappings) for (const slash of ['\\\\', '/', '\\']) raw = raw.split(oldRoot.replaceAll('\\', slash)).join(newRoot.replaceAll('\\', slash));
+  raw = remapTomlPaths(raw, mappings);
   fs.writeFileSync(p,raw);
 }
 const site = path.join(bundle, 'private', 'cloudflare-site.json');
@@ -162,4 +167,5 @@ const trayRoot = path.join(local, 'CodexWebTray');
 fs.mkdirSync(trayRoot, { recursive: true });
 fs.copyFileSync(site, path.join(trayRoot, 'cloudflare-site.json'));
 fs.writeFileSync(path.join(profile, 'CodexWeb-restore-report.json'), JSON.stringify(result,null,2));
+fs.writeFileSync(progressFile, JSON.stringify({ status: 'completed', destinations, result }, null, 2));
 console.log(JSON.stringify(result));

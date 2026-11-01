@@ -135,6 +135,7 @@ export function applyDesktopPatches(state: Row, patches: unknown): Row {
 
 export class DesktopThreadBridge {
   private attached = new Map<string, Attached>()
+  private attaching = new Map<string, Promise<boolean>>()
   private approvals = new Map<string, PendingApproval>()
   private nextApprovalId = -1
   private idleTimer: ReturnType<typeof setInterval>
@@ -166,11 +167,20 @@ export class DesktopThreadBridge {
   async attach(threadId: string): Promise<boolean> {
     if (!this.enabled) return false
     if (this.connected(threadId)) { this.attached.get(threadId)!.touchedAt = Date.now(); return true }
+    const pending = this.attaching.get(threadId)
+    if (pending) return pending
+    const attaching = this.attachOwner(threadId).finally(() => this.attaching.delete(threadId))
+    this.attaching.set(threadId, attaching)
+    return attaching
+  }
+  private async attachOwner(threadId: string): Promise<boolean> {
     if (this.attached.size >= 64 && !this.has(threadId)) return false
+    let foundOwner = false
     try {
       await this.ipc.connect()
       const discovery = await this.ipc.request('thread-owner-discovery', { hostId: 'local', conversationId: threadId })
       if (!discovery.result?.supportsUntrustedAppInput || typeof discovery.handledByClientId !== 'string') return false
+      foundOwner = true
       const owner = discovery.handledByClientId
       const settings = await this.ipc.request('thread-follower-read-model-settings', { conversationId: threadId }, owner)
       if (settings.result?.settings?.resumeState !== 'resumed') return false
@@ -178,9 +188,19 @@ export class DesktopThreadBridge {
       this.attached.set(threadId, attached); this.ipc.follow(threadId, owner, true)
       const deadline = Date.now() + 2500
       while (!attached.state && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
-      if (!attached.state) { this.detach(threadId); return false }
+      if (!attached.state) {
+        this.detach(threadId)
+        this.emit({ method: 'web/thread/desktopDisconnected', params: { threadId } })
+        return false
+      }
+      clearTimeout(attached.timer); attached.timer = undefined
+      this.publish(threadId, attached)
       return true
-    } catch { this.detach(threadId); return false }
+    } catch {
+      this.detach(threadId)
+      if (foundOwner) this.emit({ method: 'web/thread/desktopDisconnected', params: { threadId } })
+      return false
+    }
   }
   private receive(event: Row) {
     if (event.method === 'client-status-changed' && event.params?.status === 'disconnected') {
@@ -230,7 +250,9 @@ export class DesktopThreadBridge {
       createdAt: state.createdAt / 1000, updatedAt: state.updatedAt / 1000, turns,
     }, model: state.latestModel, modelProvider: state.modelProvider, webExecutionSource: 'desktop' }
   }
-  mergeRead(threadId: string, disk: unknown): unknown {
+  async mergeRead(threadId: string, disk: unknown): Promise<unknown> {
+    // Browsing follows the desktop owner without resuming a writer or sending a turn.
+    await this.attach(threadId)
     const live = this.snapshot(threadId)
     if (!live) return disk
     this.attached.get(threadId)!.touchedAt = Date.now()

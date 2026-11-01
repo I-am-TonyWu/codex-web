@@ -1,20 +1,19 @@
 # codex-web
 
+Current Windows tray version: **1.6.1**. See the [GitHub Release](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) and [changelog](docs/CHANGELOG-1.6.1.md). Immediate project assignment display synchronization in the running desktop remains unresolved.
+
 **English** · [简体中文](README.md)
 
 A browser interface for the Codex environment running on your Windows computer, with a Windows system-tray launcher. Use it locally or connect remotely through an authenticated Cloudflare Tunnel. Includes lifecycle monitoring, web passwords, skill/plugin selection, upload progress, and access to generated files.
 
 Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) **v0.1.91**. The first public release is **1.4.3.1**. This is an independent community project, not affiliated with OpenAI, GitHub, or Cloudflare. It does not mirror the ChatGPT website or forward subscription-based ChatGPT chats.
 
-Current stable version: **1.4.3.6**. Latest preview: **[1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4)** ([conversation display, task status and host connection](docs/releases/1.4.4.md)). See the [stable release notes](docs/releases/1.4.3.6.md), [version history and switching guide](docs/RELEASES.md), and [all GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases).
 
-1.4.4 includes the cumulative changes from local builds 1.4.3.10–1.4.3.12: natural-language tool summaries, collapsed commands and process images, and persistent task status. The browser only connects to the host's existing login; manage Codex accounts in the Windows client. Quota is at the top of settings, Ctrl+Enter submission is supported, and Telegram has been removed.
 
-The source includes local revision **1.4.8**: complete multiline skill descriptions and automatic Chinese card and detail text, cached by source content for new or updated skills. It retains personal skill switches, installed plugin filtering, desktop compatibility, unified web permissions, image history, compact titles, and font controls. It has not been published. See the [local revision notes](docs/CHANGELOG-1.4.8.md) and [Antigravity feasibility assessment](docs/ANTIGRAVITY-FEASIBILITY.zh-CN.md). Future custom versions use three components; the next version is 1.4.9.
 
 ## Download and requirements
 
-Read the [changes since the last public release](docs/releases/1.4.3.6.md), [host migration guide](migration/README.md), and [Windows sandbox guidance](docs/WINDOWS-SANDBOX.md).
+Read the [changes since the last public release](docs/CHANGELOG-1.6.1.md), [host migration guide](migration/README.md), and [Windows sandbox guidance](docs/WINDOWS-SANDBOX.md).
 
 - [Download the Windows x64 release](https://github.com/I-am-TonyWu/codex-web/releases/latest). Choose `CodexWebTray.exe`, not GitHub's automatically generated source archive.
 - Windows 10/11 x64 with .NET Framework 4.8 and a working, signed-in Codex Windows desktop installation.
@@ -142,6 +141,8 @@ node package.cjs
 ```
 
 The output is `artifacts/CodexWebTray.exe`. `package.cjs` bundles the Node executable used to run it, so use Windows x64 Node. It refuses to overwrite an existing `tray/payload`; remove or move that generated directory before repackaging. `build.ps1 -Test` runs monitor and security/settings tests.
+
+Source development, server builds, and migration scripts require Node.js 24 or newer; the EXE includes its runtime. The development server accepts direct loopback hosts only. Use the authenticated production service for remote access. Run `npm run check` in `web` for both type checks, unit tests, and isolated HTTP tests. `node tray/package.cjs --check` validates the platform, artifacts, version, and native PTY without writing a payload. See the [18-item remediation record](docs/CODE-OPTIMIZATION-20261015.md).
 
 For web development, run `npm run dev -- --host 127.0.0.1 --port 4173` in `web/`. If the wrapper does not forward arguments, use `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4173`. The release service uses port 18923; the development server is not a deployment method.
 

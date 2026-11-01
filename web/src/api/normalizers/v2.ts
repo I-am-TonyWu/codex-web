@@ -604,6 +604,7 @@ function toUiThread(summary: Thread): UiThread {
     id: summary.id,
     title: toThreadTitle(summary),
     projectName: toProjectName(cwd),
+    ...(typeof rawSummary.projectId === 'string' || rawSummary.projectId === null ? { projectId: rawSummary.projectId } : {}),
     cwd,
     hasWorktree,
     createdAtIso: toIso(summary.createdAt),

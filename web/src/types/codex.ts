@@ -65,6 +65,7 @@ export type UiThread = {
   title: string
   projectName: string
   projectMembership?: 'project' | 'projectless'
+  projectId?: string | null
   cwd: string
   hasWorktree: boolean
   createdAtIso: string

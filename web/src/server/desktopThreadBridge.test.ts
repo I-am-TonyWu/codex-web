@@ -143,9 +143,23 @@ describe('desktop coordination preserves the original writer', () => {
   })
   it('preserves older disk history when merging live desktop turns', async () => {
     const { bridge } = setup(); await bridge.attach(threadId)
-    const merged: any = bridge.mergeRead(threadId, { thread: { id: threadId, turns: [{ id: 'older', items: [] }, { id: 'old', items: [] }] }, hasMore: true })
+    const merged: any = await bridge.mergeRead(threadId, { thread: { id: threadId, turns: [{ id: 'older', items: [] }, { id: 'old', items: [] }] }, hasMore: true })
     expect(merged.thread.turns.map((t: any) => t.id)).toEqual(['older', 'old'])
     expect(merged.thread.turns[1].items[0].text).toBe('history'); expect(merged.hasMore).toBe(true)
+  })
+  it('subscribes on a read and replaces stale interrupted history with live desktop state without a write', async () => {
+    const { bridge, ipc, emit } = setup()
+    ipc.state.threadRuntimeStatus = { type: 'active' }
+    ipc.state.turns[0].status = 'inProgress'
+    const disk = { thread: { id: threadId, status: { type: 'notLoaded' }, turns: [{ id: 'old', status: 'interrupted', items: [] }] } }
+    const reads: any[] = await Promise.all([bridge.mergeRead(threadId, disk), bridge.mergeRead(threadId, disk)])
+    expect(reads.every(read => read.thread.status.type === 'active' && read.thread.turns[0].status === 'inProgress')).toBe(true)
+    expect(ipc.request.mock.calls.map(call => call[0])).toEqual(['thread-owner-discovery', 'thread-follower-read-model-settings'])
+    expect(emit.mock.calls.some(call => call[0].method === 'web/thread/desktopUpdated' && call[0].params.status.type === 'active')).toBe(true)
+    ipc.patches([{ op: 'replace', path: ['threadRuntimeStatus'], value: { type: 'idle' } }, { op: 'replace', path: ['turns', 0, 'status'], value: 'completed' }])
+    const completed: any = await bridge.mergeRead(threadId, disk)
+    expect(completed.thread.turns[0].status).toBe('completed')
+    expect(completed.thread.status.type).toBe('idle')
   })
   it('refuses missing stream revisions and future versions', async () => {
     const { bridge, ipc } = setup(); await bridge.attach(threadId)

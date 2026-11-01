@@ -1,3 +1,4 @@
+import { HttpError } from './requestPolicy.js'
 import { spawn } from 'node:child_process'
 import { createReadStream } from 'node:fs'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -984,7 +985,7 @@ export async function handleReviewRoutes(
         data: await buildReviewSummary(cwd, workspaceView),
       })
     } catch (error) {
-      setJson(res, 500, { error: getErrorMessage(error, 'Failed to load review summary') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to load review summary') })
     }
     return true
   }
@@ -1009,7 +1010,7 @@ export async function handleReviewRoutes(
         data: await buildReviewSnapshot(cwd, scope, workspaceView, baseBranch, commitSha),
       })
     } catch (error) {
-      setJson(res, 500, { error: getErrorMessage(error, 'Failed to load review snapshot') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to load review snapshot') })
     }
     return true
   }
@@ -1021,7 +1022,7 @@ export async function handleReviewRoutes(
         data: await applyReviewAction(payload),
       })
     } catch (error) {
-      setJson(res, 500, { error: getErrorMessage(error, 'Failed to apply review action') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to apply review action') })
     }
     return true
   }
@@ -1038,7 +1039,7 @@ export async function handleReviewRoutes(
       await initializeGitRepository(cwd)
       setJson(res, 200, { ok: true })
     } catch (error) {
-      setJson(res, 500, { error: getErrorMessage(error, 'Failed to initialize Git') })
+      setJson(res, error instanceof HttpError ? error.statusCode : 500, { error: getErrorMessage(error, 'Failed to initialize Git') })
     }
     return true
   }

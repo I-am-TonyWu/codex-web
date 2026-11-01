@@ -2,11 +2,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..', 'web');
 const dest = path.join(__dirname, 'payload');
+const { checkPackage, checkPty } = require('./package-check.cjs');
+const version = checkPackage(root);
+checkPty(root);
+if (process.argv.includes('--check')) { console.log('Package preflight passed for ' + version); process.exit(0); }
 if (fs.existsSync(dest)) throw new Error('Remove or move tray/payload before packaging to avoid stale files.');
 fs.mkdirSync(path.join(dest,'app'), {recursive:true});
 for(const file of ['dist','dist-cli','package.json','LICENSE']) {
   const src=path.join(root,file);
-  if(fs.existsSync(src)) fs.cpSync(src,path.join(dest,'app',file),{recursive:true});
+  fs.cpSync(src,path.join(dest,'app',file),{recursive:true});
 }
 const copied = new Set();
 function copyDependency(name, parent) {
@@ -36,5 +40,5 @@ for(const name of ['express','commander','ws','qrcode-terminal','node-pty']) cop
 fs.copyFileSync(process.execPath,path.join(dest,'node.exe'));
 fs.copyFileSync(path.join(__dirname,'bootstrap.cjs'),path.join(dest,'bootstrap.cjs'));
 fs.copyFileSync(path.join(__dirname,'NODE-LICENSE.txt'),path.join(dest,'NODE-LICENSE.txt'));
-fs.writeFileSync(path.join(dest,'NOTICE.txt'),'codex-web 1.4.8 - customized Windows wrapper\nBased on friuns2/codex-mobile 0.1.91 (MIT), Node.js '+process.version+' and runtime dependencies.\nUpstream updater removed; local customizations must be merged and tested manually.\nOriginal licenses are included alongside each component; bundled Mermaid frontend notices are in app/dist/third-party.\nExisting installed OpenAI Codex, account data, and credentials are not bundled.\nGitHub mark: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png\n');
+fs.writeFileSync(path.join(dest,'NOTICE.txt'),'codex-web '+version+' - customized Windows wrapper\nBased on friuns2/codex-mobile 0.1.91 (MIT), Node.js '+process.version+' and runtime dependencies.\nUpstream updater removed; local customizations must be merged and tested manually.\nOriginal licenses are included alongside each component; bundled Mermaid frontend notices are in app/dist/third-party.\nExisting installed OpenAI Codex, account data, and credentials are not bundled.\nGitHub mark: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png\n');
 console.log(JSON.stringify({packages:copied.size,payload:dest}));

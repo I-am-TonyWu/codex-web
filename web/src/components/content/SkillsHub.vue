@@ -17,8 +17,6 @@
         />
     </div>
 
-    <slot name="before-installed" />
-
     <div v-if="filteredInstalled.length > 0" class="skills-hub-section">
       <button class="skills-hub-section-toggle" type="button" @click="isInstalledOpen = !isInstalledOpen">
         <span class="skills-hub-section-title">{{ t('Personal skills ({count})', { count: filteredInstalled.length }) }}</span>
@@ -31,6 +29,7 @@
           :skill="skill"
           :show-status-badge="skill.enabled === false"
           :show-owner="false"
+          :show-browse-action="false"
           :show-toggle="true"
           :is-toggling="togglingPaths.has(skill.path || '')"
           @toggle-enabled="(skill, enabled) => handleToggleEnabled(skill as HubSkill, enabled)"
@@ -39,11 +38,13 @@
       </div>
     </div>
 
+    <slot name="after-installed" />
+
     <div class="skills-hub-section">
       <div v-if="isLoading" class="skills-hub-loading">{{ t('Loading skills...') }}</div>
       <div v-else-if="error" class="skills-hub-error">
         <span>{{ error }}</span>
-        <a class="skills-error-feedback" :href="feedbackMailto" @click="prepareSkillsErrorFeedback($event, error)">{{ t('Send feedback') }}</a>
+        <a class="skills-error-feedback" :href="feedbackUrl" target="_blank" rel="noopener noreferrer" @click="prepareSkillsErrorFeedback($event, error)">{{ t('Send feedback') }}</a>
       </div>
       <div v-else-if="installedSkills.length === 0" class="skills-hub-empty">{{ t('No personal skills installed.') }}</div>
       <div v-else-if="filteredInstalled.length === 0" class="skills-hub-empty">{{ t('No matching skills found.') }}</div>
@@ -91,8 +92,8 @@ const isUninstallActionInFlight = ref(false)
 const togglingPaths = ref(new Set<string>())
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 const { t } = useUiLanguage()
-const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
-const feedbackMailto = feedbackMailtoBase()
+const { buildFeedbackUrl, feedbackBaseUrl, recordVisibleFailure } = useFeedbackDiagnostics()
+const feedbackUrl = feedbackBaseUrl()
 
 const props = defineProps<{
   tryInFlightKey?: string
@@ -126,7 +127,7 @@ function prepareSkillsErrorFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
   const target = event.currentTarget
   if (target instanceof HTMLAnchorElement) {
-    target.href = buildFeedbackMailto()
+    target.href = buildFeedbackUrl()
   }
 }
 

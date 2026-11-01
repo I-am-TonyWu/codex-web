@@ -25,3 +25,7 @@ Close Codex/tray on the source, re-export with script 06, transfer the private f
 An online snapshot is useful for inspection but a quiescent final export is required before cutover. Never publish the private package or run both connectors with divergent data.
 
 Regression check: `node --disable-warning=ExperimentalWarning migration/test-restore.cjs` uses a disposable synthetic profile and database; it does not restore into the current user's profile.
+
+恢复与测试使用 Node.js 24 或更新版本。分发时保留完整 `scripts` 目录，包括 `toml-paths.cjs`。另运行 `node migration/test-toml-paths.cjs` 检查相似前缀、Windows 转义、数组和多行提示文本。TOML 只修改单行路径字段及路径表键，提示词、注释和多行文字保留原样；复杂自定义配置须对照原文件检查。
+
+开始复制后，新用户目录的 `CodexWeb-restore-progress.json` 记录 running/completed/failed。失败时源备份保持不变，自动恢复不会覆盖已有的部分目标。先检查记录和部分目标，将需要保留的结果另行保存，再使用新的空目标重试；不要直接向非空目标重复恢复。回归测试包含损坏 SQLite 导致的中途失败及源备份不变检查。

@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { RequestHandler, Request, Response, NextFunction } from 'express'
+import { readRequestBody, HttpError, isRequestOriginAllowed } from './requestPolicy.js'
 
 const TOKEN_COOKIE = 'portal_session'
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -42,8 +43,12 @@ function isLocalhostRemote(remote: string): boolean {
 }
 
 function isLocalhostHost(host: string): boolean {
-  const normalized = host.toLowerCase()
-  return normalized.startsWith('localhost:') || normalized === 'localhost' || normalized.startsWith('127.0.0.1:')
+  try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL('http://' + host).hostname.toLowerCase()) }
+  catch { return false }
+}
+
+export function isDirectLocalRequest(req: IncomingMessage): boolean {
+  return isLocalhostRemote(req.socket.remoteAddress ?? '') && isLocalhostHost(req.headers.host ?? '')
 }
 
 function isIPv4Octet(value: string): boolean {
@@ -223,6 +228,7 @@ export type AuthSession = {
 
 export function createAuthSession(password: string): AuthSession {
   const validTokens = readPersistedSessions()
+  const loginAttempts = new Map<string, { count: number; until: number }>()
   if (pruneExpiredSessions(validTokens)) {
     tryPersistSessions(validTokens)
   }
@@ -237,36 +243,39 @@ export function createAuthSession(password: string): AuthSession {
       return
     }
 
-    // Handle login POST
+    const login = req.path === '/auth/login' || req.path.startsWith('/password=')
+    const address = req.socket.remoteAddress || 'unknown'
+    if (login) {
+      for (const [key, value] of loginAttempts) if (value.until <= Date.now()) loginAttempts.delete(key)
+      if ((loginAttempts.get(address)?.count || 0) >= 20) {
+        res.setHeader('Retry-After', '300'); res.status(429).json({ error: 'Too many login attempts. Try again later.' }); return
+      }
+    }
+    const failedLogin = () => {
+      if (!loginAttempts.has(address) && loginAttempts.size >= 1024) loginAttempts.delete(loginAttempts.keys().next().value!)
+      const previous = loginAttempts.get(address)
+      loginAttempts.set(address, { count: (previous?.count || 0) + 1, until: previous?.until || Date.now() + 300_000 })
+    }
+
     if (req.method === 'POST' && req.path === '/auth/login') {
-      let body = ''
-      req.setEncoding('utf8')
-      req.on('data', (chunk: string) => { body += chunk })
-      req.on('end', () => {
-        let parsed: { password?: string }
-        try {
-          parsed = JSON.parse(body) as { password?: string }
-        } catch {
-          res.status(400).json({ error: 'Invalid request body' })
-          return
-        }
-
-        const provided = typeof parsed.password === 'string' ? parsed.password : ''
+      if (!isRequestOriginAllowed(req)) { res.status(403).json({ error: 'Request origin is not allowed.' }); return }
+      if (req.headers['content-type']?.split(';')[0]?.trim() !== 'application/json') { res.status(415).json({ error: 'Expected JSON.' }); return }
+      void readRequestBody(req, 8192).then(raw => {
+        const parsed: unknown = JSON.parse(raw.toString('utf8'))
+        const provided = parsed && typeof parsed === 'object' && 'password' in parsed && typeof parsed.password === 'string' ? parsed.password : ''
         if (!constantTimeCompare(provided, password)) {
-          res.status(401).json({ error: 'Invalid password' })
-          return
+          failedLogin(); res.status(401).json({ error: 'Invalid password' }); return
         }
-
-        try {
-          const token = randomBytes(32).toString('hex')
-          const expiresAt = Date.now() + SESSION_TTL_MS
-          validTokens.set(token, expiresAt)
-          tryPersistSessions(validTokens)
-          res.setHeader('Set-Cookie', buildSessionCookie(token, expiresAt))
-          res.json({ ok: true })
-        } catch {
-          res.status(500).json({ error: 'Failed to create login session' })
-        }
+        const token = randomBytes(32).toString('hex')
+        const expiresAt = Date.now() + SESSION_TTL_MS
+        validTokens.set(token, expiresAt)
+        if (validTokens.size > MAX_PERSISTED_TOKENS) validTokens.delete(validTokens.keys().next().value!)
+        loginAttempts.delete(address)
+        tryPersistSessions(validTokens)
+        res.setHeader('Set-Cookie', buildSessionCookie(token, expiresAt))
+        res.json({ ok: true })
+      }).catch((error: unknown) => {
+        if (!res.destroyed) res.status(error instanceof HttpError ? error.statusCode : 400).json({ error: 'Invalid request body' })
       })
       return
     }
@@ -283,6 +292,7 @@ export function createAuthSession(password: string): AuthSession {
         res.redirect(302, '/')
         return
       }
+      failedLogin()
     }
 
     // No valid session — serve login page

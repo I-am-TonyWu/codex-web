@@ -1,6 +1,8 @@
-const controlMocks = vi.hoisted(() => ({ recheckWriterControl: vi.fn() }))
-vi.mock('../api/conversationControl', () => controlMocks)
+const controlMocks = vi.hoisted(() => ({ recheckWriterControl: vi.fn(), conversationStates: {} }))
+vi.mock('../api/conversationControl', async () => ({ ...controlMocks, conversationStates: (await import('vue')).reactive(controlMocks.conversationStates) }))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
+import { conversationStates } from '../api/conversationControl'
 import {
   buildWorkspaceRootsProjectOrderState,
   collectWorkspaceRootPathsForProjectRemoval,
@@ -99,6 +101,32 @@ afterEach(() => {
 })
 
 describe('desktop writer conflict', () => {
+  it('updates the sidebar from desktop snapshots and control polling without a web-started turn', async () => {
+    installTestWindow()
+    const id = 'desktop-status'
+    gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [{ projectName: 'project', threads: [thread(id, '/tmp/project')] }], nextCursor: null })
+    let notification!: (value: { method: string; params: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notification = handler; return vi.fn() })
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread(id)
+    state.startPolling()
+    const busy = () => state.projectGroups.value.flatMap(group => group.threads).find(thread => thread.id === id)?.inProgress
+    notification({ method: 'web/thread/desktopUpdated', params: { threadId: id, status: { type: 'active' } } })
+    expect(busy()).toBe(true)
+    notification({ method: 'web/thread/desktopUpdated', params: { threadId: id, status: { type: 'idle' } } })
+    expect(busy()).toBe(false)
+    conversationStates[id] = { threadId: id, epoch: 'test', version: 1, owner: null, proof: null, activity: 'running', turnId: 'turn', transferring: false, desktopReleaseAvailable: false, executionSource: 'desktop' }
+    await nextTick()
+    expect(busy()).toBe(true)
+    conversationStates[id] = { ...conversationStates[id]!, activity: 'idle' }
+    await nextTick()
+    expect(busy()).toBe(false)
+    state.stopPolling(); delete conversationStates[id]
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+  })
   it('browses history without acquiring a writer', async () => {
     installTestWindow()
     const state = useDesktopState()
@@ -208,6 +236,19 @@ describe('filterGroupsByWorkspaceRoots', () => {
     expect(groups[1]?.threads[1]?.cwd).toBe('C:/Old/folder')
     expect(groups[2]?.threads[0]?.projectMembership).toBe('projectless')
     expect(source[0]?.threads[0]?.projectName).toBe('folder')
+  })
+  it('uses durable native membership even when desktop cache or cwd disagrees', () => {
+    const state: WorkspaceRootsState = { order: [], labels: {}, active: [], projectOrder: [], localProjects: [
+      { id: 'legacy', serverProjectId: 'native', name: '项目', rootPaths: ['/tmp/project'] },
+    ], threadProjectAssignments: { legacyChat: 'legacy' }, projectlessThreadIds: ['moved', 'removed'] }
+    const source = [{ projectName: 'old', threads: [
+      { ...thread('moved', '/tmp/outside'), projectId: 'native' },
+      { ...thread('removed', '/tmp/project'), projectId: null },
+      { ...thread('legacyChat', '/tmp/outside'), projectId: null },
+    ] }]
+    expect(filterGroupsByWorkspaceRoots(source, state).map(group => [group.projectName, group.threads.map(item => item.id)])).toEqual([
+      ['legacy', ['moved', 'legacyChat']], ['Projectless', ['removed']],
+    ])
   })
   it('keeps same-name modern projects separate and chooses the most specific registered root', () => {
     const state: WorkspaceRootsState = {
@@ -1210,7 +1251,7 @@ describe('provider model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     await state.sendMessageToNewThread('hi', '/tmp/project')
 
-    expect(gatewayMocks.startThread).toHaveBeenCalledWith('/tmp/project', 'gpt-5.5')
+    expect(gatewayMocks.startThread).toHaveBeenCalledWith('/tmp/project', 'gpt-5.5', null)
     expect(gatewayMocks.startThreadTurn).toHaveBeenCalledWith(
       'codex-thread',
       'hi',

@@ -680,12 +680,14 @@ const uploadRows = ref<Array<{ id: string; name: string; loaded: number; total: 
 async function uploadWithProgress(file: File): Promise<string | null> {
   const row = { id: createAttachmentId(), name: file.name, loaded: 0, total: file.size, state: '上传中' }
   uploadRows.value.push(row)
-  const path = await uploadFile(file, (loaded, total) => {
+  let path: string | null = null
+  let failure = '上传失败，请重新选择'
+  try { path = await uploadFile(file, (loaded, total) => {
     const item = uploadRows.value.find(item => item.id === row.id)
     if (item) { item.loaded = loaded; item.total = total; if (loaded >= total) item.state = '服务器处理中' }
-  })
+  }) } catch (error) { failure = error instanceof Error ? error.message : failure }
   const item = uploadRows.value.find(item => item.id === row.id)
-  if (item) { item.state = path ? '✓ 已上传' : '上传失败，请重新选择'; if (path) item.loaded = item.total }
+  if (item) { item.state = path ? '✓ 已上传' : failure; if (path) item.loaded = item.total }
   return path
 }
 function formatModelLabel(modelId: string): string {

@@ -83,7 +83,7 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
   if (rpcError !== undefined && rpcError !== null) {
     const detail = extractErrorMessage(payload, `RPC ${method} failed`)
     const serverCode = asRecord(rpcError)?.code
-    if (threadId && body.requestId && serverCode !== 'delivery_uncertain' && serverCode !== 'rpc_error') clearPendingSend(threadId)
+    if (threadId && body.requestId && serverCode !== 'delivery_uncertain' && serverCode !== 'rpc_error') clearPendingSend(threadId, body.requestId)
     const writerConflict = asRecord(rpcError)?.code === 'thread_writer_conflict' || isThreadWriterConflict(detail)
     throw new CodexApiError(writerConflict ? THREAD_WRITER_CONFLICT_MESSAGE : detail, {
       code: writerConflict ? 'thread_writer_conflict' : serverCode === 'delivery_uncertain' ? 'delivery_uncertain' : typeof serverCode === 'string' && serverCode.startsWith('control_') ? 'control_conflict' : 'rpc_error', method, status: response.status,
@@ -98,7 +98,7 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
       status: response.status,
     })
   }
-  if (threadId && body.requestId) clearPendingSend(threadId)
+  if (threadId && body.requestId) clearPendingSend(threadId, body.requestId)
   const newId = (envelope.result as { thread?: { id?: string } } | null)?.thread?.id
   if ((method === 'thread/start' || method === 'thread/fork') && newId) await refreshControl(newId)
   return envelope.result

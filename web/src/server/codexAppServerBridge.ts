@@ -18,7 +18,7 @@ import { ThreadWriterLifecycle, watchThreadClosed } from './threadWriterLifecycl
 import { recheckThreadWriter } from './threadWriterProbe.js'
 import { DesktopThreadBridge } from './desktopThreadBridge.js'
 import { listNativeProjects, matchNativeProject, resolveNativeProject, saveNativeThreadProject, type ProjectClient } from './nativeProjects.js'
-import { ConversationControl, ControlError, type ControlProof, type ControlClient } from './conversationControl.js'
+import { ConversationControl, ControlError, controlCookieScope, type ControlProof, type ControlClient } from './conversationControl.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
 import { disposeSkillTranslations } from './skillPresentation.js'
@@ -6196,7 +6196,10 @@ class AppServerProcess {
         ...(method === 'turn/start' ? buildWebTurnPermissionOverrides(typeof request.cwd === 'string' ? request.cwd : '') : {}) }
     }
     this.disposeIfConfigChanged()
-    await this.ensureInitialized()
+    try { await this.ensureInitialized() } catch (error) {
+      if (method === 'turn/start') throw new ControlError('request_not_sent', `执行后台尚未就绪，消息未发送：${getErrorMessage(error, '无法连接 Codex')}`)
+      throw error
+    }
     if (this.hostAuthError && (method === 'account/rateLimits/read' || method === 'account/read')) {
       throw new Error(this.hostAuthError)
     }
@@ -6888,9 +6891,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   })
   const getThreadSearchIndex = () => searchIndex.get()
   function scopeFor(req: IncomingMessage): string {
-    const cookie = req.headers.cookie ?? ''
-    const session = cookie.match(/(?:^|;\s*)(?:portal_session|CF_Authorization)=([^;]+)/)?.[1] ?? 'local'
-    return createHash('sha256').update(session).digest('hex')
+    return controlCookieScope(req.headers.cookie ?? '')
   }
   function clientFor(req: IncomingMessage) {
     return control.authenticate(String(req.headers['x-codex-client'] ?? ''), String(req.headers['x-codex-client-key'] ?? ''), scopeFor(req))

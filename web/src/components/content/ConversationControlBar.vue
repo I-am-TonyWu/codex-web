@@ -1,28 +1,30 @@
 <template>
   <div ref="rootRef" class="control-bar" aria-label="会话控制" :aria-busy="busy" :data-open="expanded">
     <span class="control-summary">
-      <span class="control-dot" :class="{ owned: state?.proof, blocked: state?.activity === 'external' }" />
+      <span class="control-dot" :class="{ owned: state?.proof && state?.activity !== 'external', blocked: state?.activity === 'external' }" />
       <span role="status">{{ label }}</span>
       <span v-if="notice && connectionKnown" class="control-hint" :title="notice">· 有提示</span>
     </span>
+    <button v-if="hasPendingSend" class="control-pending" type="button" :disabled="busy" @click="expanded = true; checkDelivery()">发送待确认 · 核对</button>
     <button ref="triggerRef" class="control-toggle" type="button" aria-label="网页控制选项" aria-haspopup="dialog" :aria-expanded="expanded" @click="expanded = !expanded"><IconTablerDots /></button>
     <Teleport to="body">
     <div v-if="expanded" ref="panelRef" class="control-menu" :style="menuStyle" role="dialog" aria-label="网页控制选项" @keydown.esc.stop.prevent="closeMenu">
     <div class="control-actions">
-      <button v-if="!state?.proof" :disabled="busy || !state" @click="takeover(false)">{{ state?.owner ? '接管此对话' : '取得控制权' }}</button>
+      <button type="button" :disabled="busy || retrying" @click="takeover(false)">{{ state?.owner && !state?.proof ? '接管并检查写入' : '重新连接并检查写入' }}</button>
       <button v-if="state?.turnId && ['running', 'approval'].includes(state.activity)" :disabled="busy" @click="takeover(true)">停止任务并接管</button>
       <button v-if="state?.proof" :disabled="busy" @click="leave">退出控制</button>
       <button :disabled="busy" @click="refresh">刷新网页控制</button>
-      <button :disabled="busy || retrying || Boolean(state?.owner && !state?.proof)" @click="emit('retry')">{{ retrying ? '正在检查…' : '重新检查写入状态' }}</button>
+      <button :disabled="busy || retrying || Boolean(state?.owner && !state?.proof)" @click="checkWriter">{{ retrying ? '正在检查…' : '重新检查写入状态' }}</button>
+      <button type="button" :disabled="busy" @click="checkDelivery">核对上一条发送</button>
+      <button v-if="hasPendingSend" type="button" :disabled="busy" @click="clearUncertain">已核对历史，允许下一次发送</button>
       <details class="control-help">
         <summary>交接说明</summary>
         <p>接管网页控制后，当前任务继续运行。旧网页只能查看；两端草稿不会自动发送。退出、断线或后台超过 30 秒后，其他网页可取得控制，任务继续。</p>
         <p>接管或服务重启后，原待发送队列暂停，请编辑后明确重新排队或手动发送。</p>
-        <p>网页控制权与本机写入锁是两层状态。桌面持有会话时，会尝试连接桌面的本机协同通道，在同一条对话发送、同步结果和审批；不需要先释放或另建分支。桌面通道不兼容或断开时保留草稿，重新检查不会自动发送。</p>
+        <p>网页控制权与本机写入锁是两层状态。兼容旧协同通道的桌面版本可在同一条对话发送、同步结果和审批。桌面通道不兼容或断开时保留草稿，重新检查不会自动发送。</p>
         <p>协同模式沿用网页服务配置的权限与审批策略，默认完全访问、无需审批；桌面自行发起的任务使用桌面设置。桌面正在执行或等待审批时，请等待完成，或明确停止任务后再发送。改名、回滚和归档等操作仍可能需要在客户端完成。</p>
-        <button disabled title="尚无经过验证的桌面原生会话控制接口">释放桌面会话（暂不可用）</button>
-        <button :disabled="busy" @click="checkDelivery">核对发送结果</button>
-        <button :disabled="busy" @click="clearUncertain">已核对历史，清除待确认标记</button>
+        <p>返回桌面初始页或关闭聊天界面，不保证后台释放写入占用。当前桌面版本可能不再提供旧协同通道；不能远程强制释放它，也不会自动结束 Codex。</p>
+        <p>发送待确认是另一项保护：接管控制权不会清除记录。请先核对回执与历史；明确清除后也不会自动发送。</p>
       </details>
     </div>
       <p v-if="notice" class="control-notice" role="status">{{ notice }}</p>
@@ -33,9 +35,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import IconTablerDots from '../icons/IconTablerDots.vue'
-import { conversationStates, refreshControl, claimControl, releaseControl, heartbeatControl, checkPendingSend, clearPendingSend } from '../../api/conversationControl'
+import { conversationStates, refreshControl, claimControl, releaseControl, heartbeatControl, checkPendingSend, clearPendingSend, pendingSendByThreadId, restorePendingSends } from '../../api/conversationControl'
 const props = defineProps<{ threadId: string; retrying?: boolean }>()
-const emit = defineEmits<{ acquired: []; retry: []; statusKnown: [known: boolean] }>()
+const emit = defineEmits<{ acquired: []; retry: [onChecked: (success: boolean) => void]; statusKnown: [known: boolean] }>()
 const busy = ref(false)
 const notice = ref('')
 const expanded = ref(false)
@@ -59,12 +61,13 @@ watch(expanded, async value => { if (value) { await nextTick(); placeMenu(); pan
 onMounted(() => { window.addEventListener('pointerdown', onOutsidePointer); window.addEventListener('resize', placeMenu); window.addEventListener('scroll', placeMenu, true) })
 function setKnown(known: boolean) { connectionKnown.value = known; emit('statusKnown', known) }
 const state = computed(() => conversationStates[props.threadId])
+const hasPendingSend = computed(() => Boolean(pendingSendByThreadId[props.threadId]))
 const label = computed(() => {
   const value = state.value
   if (!connectionKnown.value || !value) return '控制状态待确认'
   if (value.transferring) return '正在交接，请稍候'
   if (value.activity === 'external' && value.owner && !value.proof) return `其他${value.owner.label}控制 · 当前只读`
-  if (value.activity === 'external') return '本机占用待检查'
+  if (value.activity === 'external') return '上次检查桌面占用 · 写入尚未恢复'
   const owner = value.proof ? '本网页控制' : value.owner ? `其他${value.owner.label}控制 · 只读` : '网页控制未取得'
   return owner + (value.executionSource === 'desktop' ? ' · 桌面协同' : '')
 })
@@ -76,7 +79,20 @@ async function run(action: () => Promise<unknown>) {
 async function refresh() { await run(async () => { try { await refreshControl(props.threadId); notice.value = ''; setKnown(true) } catch (error) { setKnown(false); throw error } }) }
 async function takeover(stop: boolean) {
   if (stop && !window.confirm('停止会保留已经完成的文件修改，不能撤销已执行操作。确认停止当前任务并接管？')) return
-  await run(async () => { await claimControl(props.threadId, true, stop); notice.value = stop ? '任务已确认停止。草稿尚未发送。' : '已取得控制权。草稿尚未发送。'; emit('acquired') })
+  await run(async () => {
+    await claimControl(props.threadId, true, stop)
+    notice.value = stop ? '任务已确认停止，正在检查写入；草稿尚未发送。' : '网页控制已恢复，正在检查实际写入；草稿尚未发送。'
+    emit('acquired'); checkWriter()
+  })
+}
+function checkWriter() {
+  const threadId = props.threadId
+  emit('retry', success => {
+    if (props.threadId !== threadId) return
+    if (!success) notice.value = '本次写入检查未通过。请查看对话中的错误，草稿尚未发送。'
+    else if (state.value?.activity === 'idle') notice.value = hasPendingSend.value ? '写入检查通过，但上一条发送仍待核对。请先核对发送结果。' : '原对话写入检查通过。请手动发送草稿，不会自动重发。'
+    else notice.value = '网页控制已恢复；执行状态请查看会话控制栏。草稿尚未发送。'
+  })
 }
 async function leave() { await run(async () => { await releaseControl(props.threadId); notice.value = '已退出控制，正在执行的任务继续运行。' }) }
 async function checkDelivery() { await run(async () => { notice.value = await checkPendingSend(props.threadId) }) }
@@ -87,6 +103,7 @@ let timer: ReturnType<typeof setInterval> | undefined
 let generation = 0
 let polling = false
 watch(() => props.threadId, (threadId, previous) => {
+  restorePendingSends()
   generation++; notice.value = ''; expanded.value = false; clearInterval(timer)
   if (previous && conversationStates[previous]?.proof) void releaseControl(previous).catch(() => undefined)
   if (!threadId) return
@@ -118,6 +135,8 @@ onBeforeUnmount(() => { generation++; clearInterval(timer); window.removeEventLi
 @keyframes control-open { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 .control-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: #a1a1aa; }
 .control-dot.owned { background: #22c55e; } .control-dot.blocked { background: #eab308; }
+.control-pending { color: #be123c; border: 1px solid currentColor; }
+:global(:root.dark .control-pending) { color: #fb7185; }
 .control-actions { display: flex; flex-direction: column; gap: 2px; }
 button, .control-help > summary { border: 0; border-radius: 5px; padding: 7px 9px; color: inherit; background: transparent; cursor: pointer; font: inherit; text-align: left; }
 .control-actions > button { width: 100%; }

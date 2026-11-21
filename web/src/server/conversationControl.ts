@@ -10,7 +10,12 @@ export type ControlClient = { id: string; key: string; scope: string; label: str
 export type ControlProof = { epoch: string; version: number; token: string }
 type Entry = { version: number; revision: number; owner: ControlClient | null; token: string; heartbeat: number; activity: string; turnId: string | null; transferring: boolean; completedTurnId: string | null; executionSource: 'web' | 'desktop' }
 type Receipt = { id: string; scope: string; threadId: string; hash: string; state: 'pending' | 'completed' | 'rejected'; result?: unknown; at: number }
-const reject = (message = '此对话的控制权已改变。请查看最新状态，并明确点击“接管此对话”。消息未发送。'): never => { throw new ControlError('control_conflict', message) }
+export function controlCookieScope(cookie: string): string {
+  const portal = cookie.match(/(?:^|;\s*)portal_session=([^;]+)/)?.[1]
+  const access = cookie.match(/(?:^|;\s*)CF_Authorization=([^;]+)/)?.[1]
+  return createHash('sha256').update(portal ?? access ?? 'local').digest('hex')
+}
+const reject = (message = '此对话的控制权已改变。请查看最新状态，并明确点击“接管并检查写入”。消息未发送。'): never => { throw new ControlError('control_conflict', message) }
 
 /** Browser control is independent of the OS writer lock. Never kill a desktop process here. */
 export class ConversationControl {
@@ -187,7 +192,7 @@ export class ConversationControl {
       let result: unknown
       try { result = await action() } catch (error) {
         // A transport timeout may have created a turn. Keep pending rather than declare rejection.
-        const preflightRejected = error instanceof ControlError && ['desktop_thread_busy', 'desktop_bridge_unavailable', 'desktop_operation_unsupported'].includes(error.code)
+        const preflightRejected = error instanceof ControlError && ['request_not_sent', 'desktop_thread_busy', 'desktop_bridge_unavailable', 'desktop_operation_unsupported'].includes(error.code)
         if (preflightRejected || /already has an active writer|thread not found|invalid (?:params|argument)|unsupported/iu.test(String(error))) await this.persist({ ...receipt, state: 'rejected' })
         throw error
       }

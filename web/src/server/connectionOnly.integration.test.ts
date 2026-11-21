@@ -65,6 +65,20 @@ afterEach(async () => {
 })
 
 describe('connection-only remote service', () => {
+  it('records a rejected receipt when the executor cannot initialize before turn submission', async () => {
+    const registered=(await request('/codex-api/control/register',{label:'fixture'})).body.data
+    const identity={'x-codex-client':registered.id,'x-codex-client-key':registered.key}
+    const state=(await request('/codex-api/control/state?threadId=unsent',undefined,identity)).body.data
+    const owned=(await request('/codex-api/control/claim',{threadId:'unsent',epoch:state.epoch,version:state.version},identity)).body.data
+    const headers={...identity,'x-codex-control':JSON.stringify(owned.proof)}
+    process.env.CONNECTION_TEST_SPAWN_ERROR=join(home,'missing-executable.exe')
+    try {
+      const id='not-sent-request-12345678'
+      const result=await request('/codex-api/rpc',{method:'turn/start',requestId:id,params:{threadId:'unsent',input:[]}},headers)
+      expect(result.body.error.code).toBe('request_not_sent')
+      expect((await request('/codex-api/control/receipt?id='+id,undefined,identity)).body.data.state).toBe('rejected')
+    } finally { delete process.env.CONNECTION_TEST_SPAWN_ERROR }
+  })
   it('persists native membership without racing the desktop cache and reports unconfirmed desktop display', async () => {
     const path=join(home,'.codex-global-state.json')
     await writeFile(path,JSON.stringify({'local-projects':{'local-project':{name:'项目',rootPaths:[home]}},'projectless-thread-ids':['fixture-chat']}))

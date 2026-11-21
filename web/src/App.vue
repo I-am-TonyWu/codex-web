@@ -2067,12 +2067,14 @@ async function restoreControlDraft(): Promise<void> {
   if (draft && selectedThreadId.value === threadId && !threadComposerRef.value?.hasUnsavedDraft()) threadComposerRef.value?.hydrateDraft(draft)
 }
 
-async function onRetryThreadWriter(threadId: string): Promise<void> {
-  if (isRetryingThreadWriter.value || isContinuingOnWeb.value || threadId !== selectedThreadId.value) return
+async function onRetryThreadWriter(threadId: string, onChecked?: (success: boolean) => void): Promise<void> {
+  if (isRetryingThreadWriter.value || isContinuingOnWeb.value || threadId !== selectedThreadId.value) { onChecked?.(false); return }
   isRetryingThreadWriter.value = true
   const draft = getPendingThreadDraft(threadId)
+  let checked = false
   try {
-    if (await retryThreadWriter(threadId)) {
+    checked = await retryThreadWriter(threadId)
+    if (checked) {
       await nextTick()
       if (draft && threadId === selectedThreadId.value && !threadComposerRef.value?.hasUnsavedDraft()) {
         threadComposerRef.value?.hydrateDraft(draft)
@@ -2080,6 +2082,7 @@ async function onRetryThreadWriter(threadId: string): Promise<void> {
     }
   } finally {
     isRetryingThreadWriter.value = false
+    onChecked?.(checked)
   }
 }
 

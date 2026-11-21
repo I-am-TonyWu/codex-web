@@ -1,8 +1,8 @@
 # codex-web
 
-当前 Windows 托盘版本：**1.6.1**。下载和版本说明见 [GitHub Release](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) 和 [更新记录](docs/CHANGELOG-1.6.1.md)。运行中的桌面客户端即时显示项目归属仍待解决。
+当前 Windows 托盘版本：**1.6.2**。下载和版本说明见 [GitHub Release](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.2) 和 [更新记录](docs/CHANGELOG-1.6.2.md)。修复发送待确认恢复与网页控制状态；桌面原生写入占用的远程释放仍有兼容性限制。
 
-[English](README.en.md) · **中文**
+[English](README.en.md) · **中文** · [全部历史版本](docs/RELEASES.md) · [GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases)
 
 把 Windows 电脑中运行的 Codex 工作环境带到浏览器：本机运行服务，手机或其他电脑通过网页访问。提供 Windows 系统托盘程序，支持自动跟随 Codex 启停、网页密码、技能与插件选择、上传进度和生成文件访问。
 
@@ -13,7 +13,7 @@
 
 ## 下载和系统要求
 
-本次版本相较上次公开版的[完整更新说明](docs/CHANGELOG-1.6.1.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。Windows 沙箱问题见[沙箱修复说明](docs/WINDOWS-SANDBOX.md)。
+本次版本相较上次公开版的[完整更新说明](docs/CHANGELOG-1.6.2.md)；跨主机搬迁见[迁移工具和步骤](migration/README.md)。Windows 沙箱问题见[沙箱修复说明](docs/WINDOWS-SANDBOX.md)。
 
 - [下载 Windows x64 托盘程序](https://github.com/I-am-TonyWu/codex-web/releases/latest)。下载 `CodexWebTray.exe`，不要把 GitHub 自动生成的 Source code 压缩包当作安装程序。
 - Windows 10/11 x64、.NET Framework 4.8；需要已安装、登录并能正常工作的 Codex Windows 桌面客户端。

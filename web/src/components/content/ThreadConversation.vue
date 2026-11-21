@@ -701,7 +701,7 @@
       <button v-if="taskState.kind === 'waiting' || taskState.kind === 'failed'" type="button" class="task-status-action" @click="jumpToLatest">{{ taskState.kind === 'waiting' ? '查看待处理项' : '查看详情' }}</button>
       <button v-else-if="showJumpToLatestButton" type="button" class="task-status-action" @click="jumpToLatest">回到最新</button>
     </aside>
-    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="emit('retryWriter', activeThreadId)" @status-known="controlStatusKnown = $event" />
+    <ConversationControlBar v-if="activeThreadId" :thread-id="activeThreadId" :retrying="isRetryingThreadWriter" @acquired="emit('controlAcquired')" @retry="onChecked => emit('retryWriter', activeThreadId, onChecked)" @status-known="controlStatusKnown = $event" />
     </div>
 
     <button
@@ -1244,7 +1244,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnIndex: number }]
   continueOnWeb: [threadId: string]
-  retryWriter: [threadId: string]
+  retryWriter: [threadId: string, onChecked?: (success: boolean) => void]
   controlAcquired: []
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]

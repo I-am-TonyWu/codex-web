@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ConversationControl, ControlError } from './conversationControl'
+import { ConversationControl, ControlError, controlCookieScope } from './conversationControl'
 let dir: string
 let now: number
 let control: ConversationControl
+it('binds control to the web login regardless of Cloudflare cookie order or renewal', () => {
+  const first = controlCookieScope('CF_Authorization=old; portal_session=web-login')
+  expect(controlCookieScope('portal_session=web-login; CF_Authorization=new')).toBe(first)
+  expect(controlCookieScope('CF_Authorization=new; portal_session=web-login')).toBe(first)
+  expect(controlCookieScope('portal_session=other-login')).not.toBe(first)
+})
 it('keeps an active owner registered while reclaiming idle browser registrations', async () => {
   const active = control.register('scope', 'active')
   const state = control.status('active-thread', active)
@@ -137,7 +143,7 @@ describe('browser control and executor handoff', () => {
     control.activity('t', 'running', 'finished-turn')
     expect(control.status('t', clients()[0]).activity).toBe('idle')
   })
-  it.each(['desktop_thread_busy', 'desktop_bridge_unavailable', 'delivery_uncertain'])('records %s according to whether the request reached the executor', async code => {
+  it.each(['request_not_sent', 'desktop_thread_busy', 'desktop_bridge_unavailable', 'delivery_uncertain'])('records %s according to whether the request reached the executor', async code => {
     const [a] = clients(); const s = control.status('t', a); const owned = await control.claim('t', a, s.epoch, 0, false)
     const id = 'request-1234567890123456'
     await expect(control.sendOnce('t', a, owned.proof, id, {}, async () => { throw new ControlError(code, 'test') })).rejects.toMatchObject({ code })

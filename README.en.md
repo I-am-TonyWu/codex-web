@@ -1,8 +1,8 @@
 # codex-web
 
-Current Windows tray version: **1.6.1**. See the [GitHub Release](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) and [changelog](docs/CHANGELOG-1.6.1.md). Immediate project assignment display synchronization in the running desktop remains unresolved.
+Current Windows tray version: **1.6.2**. See the [GitHub Release](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.2) and [changelog](docs/CHANGELOG-1.6.2.md). Fixes pending-send recovery and browser control state. Remote release of native desktop writers still has compatibility limits.
 
-**English** · [简体中文](README.md)
+**English** · [Version history](docs/RELEASES.md) · [GitHub Releases](https://github.com/I-am-TonyWu/codex-web/releases) · [简体中文](README.md)
 
 A browser interface for the Codex environment running on your Windows computer, with a Windows system-tray launcher. Use it locally or connect remotely through an authenticated Cloudflare Tunnel. Includes lifecycle monitoring, web passwords, skill/plugin selection, upload progress, and access to generated files.
 
@@ -13,7 +13,7 @@ Customized from [friuns2/codex-mobile](https://github.com/friuns2/codex-mobile) 
 
 ## Download and requirements
 
-Read the [changes since the last public release](docs/CHANGELOG-1.6.1.md), [host migration guide](migration/README.md), and [Windows sandbox guidance](docs/WINDOWS-SANDBOX.md).
+Read the [changes since the last public release](docs/CHANGELOG-1.6.2.md), [host migration guide](migration/README.md), and [Windows sandbox guidance](docs/WINDOWS-SANDBOX.md).
 
 - [Download the Windows x64 release](https://github.com/I-am-TonyWu/codex-web/releases/latest). Choose `CodexWebTray.exe`, not GitHub's automatically generated source archive.
 - Windows 10/11 x64 with .NET Framework 4.8 and a working, signed-in Codex Windows desktop installation.

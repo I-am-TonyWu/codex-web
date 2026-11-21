@@ -6,7 +6,8 @@
 
 | 版本 / Version | 类型 / Channel | 内容 / Changes | 下载 / Download |
 |---|---|---|---|
-| 1.6.1 | 最新 / Latest | CLI 路径重新发现、持久分叉、90 MiB 上传、原生项目归属与已知限制 | [v1.6.1](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) |
+| 1.6.2 | 最新 / Latest | 发送待确认恢复、过期终端注册恢复、控制版本校验与桌面占用提示 | [v1.6.2](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.2) |
+| 1.6.1 | 历史稳定 / Historical stable | CLI 路径重新发现、持久分叉、90 MiB 上传、原生项目归属与已知限制 | [v1.6.1](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.6.1) |
 | 1.4.4 | 预览 / Pre-release | 自然语言工具摘要、折叠过程图片、固定任务状态、主机持有账户、Ctrl+Enter | [v1.4.4](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.4) |
 | 1.4.3.9 | 预览 / Pre-release | 桌面持有历史会话时通过本机协同通道发送、同步结果及审批 | [v1.4.3.9](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.9) |
 | 1.4.3.8 | 预览 / Pre-release | 修正占用状态缓存、原对话写入重查、手动发送重试 | [v1.4.3.8](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.8) |
@@ -16,6 +17,21 @@
 | 1.4.3.1 | 首个公开版 / First public release | 托盘、身份验证、技能插件和文件访问 | [v1.4.3.1](https://github.com/I-am-TonyWu/codex-web/releases/tag/v1.4.3.1) |
 
 1.4.3.2、1.4.3.3、1.4.3.5 为之前的中间构建，没有单独公开发布；它们的功能已合入上述发行版。这里不把不存在的发行附件列为可下载版本。
+
+## 本地中间版本 / Local intermediate builds
+
+以下版本当时仅在本地使用，功能已合入公开发行版；没有对应的独立 GitHub Release 或公开 EXE。链接为更新说明，不是安装包。These builds were local only and are included in later public releases. Links below are changelogs, not separate downloads.
+
+| 版本 / Version | 更新说明 / Changelog |
+|---|---|
+| 1.6.0 | [Codex / OpenCode 双服务托盘](CHANGELOG-1.6.0.md) |
+| 1.5.1 | [桌面实时运行状态](CHANGELOG-1.5.1.md) |
+| 1.5.0 | [紧凑界面、额度与项目归属](CHANGELOG-1.5.0.md) |
+| 1.4.9 | [权限与版本显示修复](CHANGELOG-1.4.9.md) |
+| 1.4.8 | [完整中文技能说明](CHANGELOG-1.4.8.md) |
+| 1.4.7 | [插件与个人技能管理](CHANGELOG-1.4.7.md) |
+| 1.4.6 | [文本显示与网页权限](CHANGELOG-1.4.6.md) |
+| 1.4.5 | [附件与紧凑界面](CHANGELOG-1.4.5.md) |
 
 ## 切换步骤 / Switching
 
